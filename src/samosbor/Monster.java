@@ -1,5 +1,8 @@
 package samosbor;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+
 /**
  * ПРОЦЕДУРНЫЙ МОНСТР ИЗ РАЗНЫХ ЧАСТЕЙ ТЕЛА.
  * Как в Insmouse no Yakata, твари не заранее нарисованы: каждая особь
@@ -54,6 +57,13 @@ public final class Monster {
     public Raster[] frames;
     public int frameIndex;
 
+    // Поведение Insmouse no Yakata: тварь не «бежит по BFS», а медленно
+    // бродит возле своего места, изредка замечает игрока, перед атакой
+    // замирает в позе выпада, а после попадания шарахается в сторону.
+    public int homeX, homeY;
+    public long windupUntil, fleeUntil, noticedUntil, nextWander;
+    public int attackCooldown;
+
     private Monster() {}
 
     /** Создать случайную особь. */
@@ -69,20 +79,20 @@ public final class Monster {
         m.maxHp = 2 + m.torso + m.head / 2 + floorIndex / 4;
         if (m.maxHp > 10) m.maxHp = 10;
         m.hp = m.maxHp;
-        m.damage = 1 + m.arms / 2;
-        m.speedMs = 1000 - m.legs * 90 - floorIndex * 8;
-        if (m.legs == 5) m.speedMs -= 180;
-        if (m.speedMs < 280) m.speedMs = 280;
-        m.sight = 7 + m.extra;
+        // В оригинале укус снимает ОДНО сердце; твари опасны числом, а не уроном.
+        m.damage = 1;
+        // Медленные, предсказуемые шаги (в оригинале тварей обходят, а не «кайтят»).
+        m.speedMs = 1700 + m.legs * 170 - floorIndex * 12;
+        if (m.legs == 5) m.speedMs -= 220;
+        if (m.speedMs < 1150) m.speedMs = 1150;
+        if (m.speedMs > 2700) m.speedMs = 2700;
+        // Чутьё короткое: тварь не преследует через весь этаж.
+        m.sight = 3 + m.extra / 2;
+        // Длинная пауза между укусами: три сердца не исчезают за пару секунд.
+        m.attackCooldown = 6600 - m.arms * 150;
+        if (m.attackCooldown < 5600) m.attackCooldown = 5600;
         m.alive = true;
-
-        StringBuffer sb = new StringBuffer();
-        sb.append(HEAD_SHORT[m.head]);
-        sb.append(ARMS_SHORT[m.arms]);
-        sb.append("-");
-        sb.append(TORSO_SHORT[m.torso]);
-        sb.append(LEGS_SHORT[m.legs]);
-        m.name = sb.toString();
+        m.name = makeName(m);
 
         m.frames = new Raster[2];
         m.frames[0] = build(m, 0);
@@ -90,6 +100,93 @@ public final class Monster {
         m.frames[0].buildVb();
         m.frames[1].buildVb();
         return m;
+    }
+
+    private static String makeName(Monster m) {
+        StringBuffer sb = new StringBuffer();
+        sb.append(HEAD_SHORT[m.head]);
+        sb.append(ARMS_SHORT[m.arms]);
+        sb.append("-");
+        sb.append(TORSO_SHORT[m.torso]);
+        sb.append(LEGS_SHORT[m.legs]);
+        return sb.toString();
+    }
+
+    /** Восстановление из автосейва: спрайты собираются заново из тех же частей. */
+    public static Monster restore(DataInputStream in) throws Exception {
+        Monster m = new Monster();
+        m.head = in.readByte();
+        m.torso = in.readByte();
+        m.arms = in.readByte();
+        m.legs = in.readByte();
+        m.extra = in.readByte();
+        m.palette = in.readByte();
+        m.maxHp = in.readInt();
+        m.hp = in.readInt();
+        m.damage = in.readInt();
+        m.speedMs = in.readInt();
+        m.sight = in.readInt();
+        m.attackCooldown = in.readInt();
+        m.tileX = in.readInt();
+        m.tileY = in.readInt();
+        m.toX = in.readInt();
+        m.toY = in.readInt();
+        m.x = in.readInt();
+        m.y = in.readInt();
+        m.moveT = in.readInt();
+        m.moving = in.readBoolean();
+        m.alive = in.readBoolean();
+        m.nextThink = in.readLong();
+        m.nextAttack = in.readLong();
+        m.respawnAt = in.readLong();
+        m.windupUntil = in.readLong();
+        m.fleeUntil = in.readLong();
+        m.noticedUntil = in.readLong();
+        m.nextWander = in.readLong();
+        m.homeX = in.readInt();
+        m.homeY = in.readInt();
+        m.frameIndex = in.readInt();
+        m.name = makeName(m);
+        m.frames = new Raster[2];
+        m.frames[0] = build(m, 0);
+        m.frames[1] = build(m, 1);
+        m.frames[0].buildVb();
+        m.frames[1].buildVb();
+        return m;
+    }
+
+    public void write(DataOutputStream out) throws Exception {
+        out.writeByte(head);
+        out.writeByte(torso);
+        out.writeByte(arms);
+        out.writeByte(legs);
+        out.writeByte(extra);
+        out.writeByte(palette);
+        out.writeInt(maxHp);
+        out.writeInt(hp);
+        out.writeInt(damage);
+        out.writeInt(speedMs);
+        out.writeInt(sight);
+        out.writeInt(attackCooldown);
+        out.writeInt(tileX);
+        out.writeInt(tileY);
+        out.writeInt(toX);
+        out.writeInt(toY);
+        out.writeInt(x);
+        out.writeInt(y);
+        out.writeInt(moveT);
+        out.writeBoolean(moving);
+        out.writeBoolean(alive);
+        out.writeLong(nextThink);
+        out.writeLong(nextAttack);
+        out.writeLong(respawnAt);
+        out.writeLong(windupUntil);
+        out.writeLong(fleeUntil);
+        out.writeLong(noticedUntil);
+        out.writeLong(nextWander);
+        out.writeInt(homeX);
+        out.writeInt(homeY);
+        out.writeInt(frameIndex);
     }
 
     public String description() {
@@ -106,9 +203,16 @@ public final class Monster {
         moving = false;
         alive = true;
         hp = maxHp;
+        homeX = tx;
+        homeY = ty;
         nextThink = 0;
         nextAttack = 0;
         respawnAt = 0;
+        windupUntil = 0;
+        fleeUntil = 0;
+        noticedUntil = 0;
+        nextWander = 0;
+        frameIndex = 0;
     }
 
     /** Позиция с интерполяцией между клетками. */

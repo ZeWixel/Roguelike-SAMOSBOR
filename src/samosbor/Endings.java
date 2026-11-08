@@ -6,7 +6,7 @@ public final class Endings {
     public static final int A = 0, B = 1, C = 2, D = 3, DEAD = 4;
 
     private static final String[][] TEXT = {
-        { // A — лучшая: быстро, без смертей и без пароля
+        { // A — лучшая: быстро и без смертей
             "КОНЦОВКА A: ГЕРМОДВЕРЬ",
             "ТЫ ПРОШЁЛ 13 ЭТАЖЕЙ",
             "ДО СИРЕНЫ. ЛИФТ",
@@ -53,9 +53,9 @@ public final class Endings {
             "СТРОКА ВЫЧЕРКНУТА.",
             "ГРАБЛИ ПЕРЕДАДУТ",
             "СЛЕДУЮЩЕМУ.",
-            "ЗАПОМНИ ПАРОЛЬ:",
-            "",
-            ""
+            "АВТОСЕЙВ ОТКАТИЛ",
+            "К НАЧАЛУ ЭТАЖА.",
+            "В МЕНЮ: ПРОДОЛЖИТЬ"
         }
     };
 
@@ -66,10 +66,11 @@ public final class Endings {
         return TEXT[ending];
     }
 
-    /** Условия концовки после 13 этажей. */
-    public static int choose(int deaths, boolean usedPassword, int totalTimeLeft,
-                             int ammo, int fastFloors, int minFloor) {
-        if (usedPassword || minFloor < 540) return D;
+    /** Условия концовки после 13 этажей (паролей больше нет). */
+    public static int choose(int deaths, int totalTimeLeft, int ammo,
+                             int fastFloors, int minFloor) {
+        // Шутка Партии: забег увёл на нижние, «нежилые» этажи.
+        if (minFloor <= 548) return D;
         if (deaths == 0 && fastFloors >= 10 && totalTimeLeft > 0) return A;
         if (ammo == 0 || totalTimeLeft <= 0) return B;
         return C;

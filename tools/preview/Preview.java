@@ -18,11 +18,13 @@ import java.nio.file.Paths;
 import java.util.concurrent.Executors;
 
 /**
- * ПРЕВЬЮ: запускает тот же самый J2ME-код на JDK 8 через заглушки MIDP.
+ * ПРЕВЬЮ: запускает тот же самый J2ME-код на JDK 8 через заглушки MIDP/MMAPI/RMS.
  * 1) игровой цикл рисует в BufferedImage;
- * 2) HttpServer отдаёт кадры как PNG и принимает нажатия клавиш;
+ * 2) HttpServer отдаёт кадры как PNG, события звука и принимает нажатия клавиш;
  * 3) браузер показывает живой экран 240x320 с управлением с клавиатуры.
  * Это не порт на JS — в браузере играет скомпилированный samosbor.Game.
+ *
+ * MIDI на JDK-заглушках не звучит: /events дублирует эффекты через WebAudio.
  *
  * Запуск: java -cp build/preview:res samosbor.Preview [порт]
  *         java -cp build/preview:res samosbor.Preview --capture dir
@@ -54,6 +56,7 @@ public final class Preview {
                 String p = ex.getRequestURI().getPath();
                 if ("/frame.png".equals(p)) { sendPng(ex); return; }
                 if ("/key".equals(p)) { handleKey(ex); return; }
+                if ("/events".equals(p)) { sendEvents(ex); return; }
                 if ("/reset".equals(p)) {
                     synchronized (Preview.class) { game = new Game(null); }
                     send(ex, "text/plain", "ok".getBytes(StandardCharsets.UTF_8));
@@ -108,6 +111,15 @@ public final class Preview {
         os.close();
     }
 
+    /** Имена MIDI-эффектов для браузерной озвучки WebAudio. */
+    private static void sendEvents(HttpExchange ex) throws java.io.IOException {
+        String e = Audio.lastEvent == null ? "" : Audio.lastEvent;
+        String m = Audio.lastMusic == null ? "" : Audio.lastMusic;
+        String json = "{\"event\":\"" + e + "\",\"at\":" + Audio.lastEventAt +
+                ",\"music\":\"" + m + "\"}";
+        send(ex, "application/json; charset=utf-8", json.getBytes(StandardCharsets.UTF_8));
+    }
+
     private static void sendPng(HttpExchange ex) throws java.io.IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Game g = game;
@@ -147,29 +159,39 @@ public final class Preview {
     private static void capture(String dir) throws Exception {
         File d = new File(dir);
         d.mkdirs();
+        Save.clear();
         Game g = new Game(null);
         BufferedImage img = frame;
         Graphics g2 = gfx;
         g.paint(g2);
-        save(img, new File(d, "01-title.png"));
-        tap(g, 53); g.paint(g2);                       // НОВЫЙ ЗАБЕГ
-        save(img, new File(d, "02-brief.png"));
-        tap(g, 53); g.paint(g2);                       // НАЧАТЬ
-        save(img, new File(d, "03-play.png"));          // вид из коридора
+        save(img, new File(d, "01-title.png"));           // главное меню
+
+        tap(g, 56); tap(g, 56); g.paint(g2);              // классическое перелистывание
+        save(img, new File(d, "02-menu-nav.png"));
+        tap(g, 50); tap(g, 50);                           // вернулись к «НОВЫЙ ЗАБЕГ»
+
+        tap(g, 53); g.paint(g2);                          // НОВЫЙ ЗАБЕГ
+        save(img, new File(d, "03-brief.png"));
+        tap(g, 53); g.paint(g2);                          // НАЧАТЬ
+        save(img, new File(d, "04-play.png"));            // вид из коридора
+
+        tap(g, 55); g.paint(g2);                          // 7 — достать оружие
+        save(img, new File(d, "05-aiming.png"));          // прицел + FP-оружие
 
         placeMonsterInFront(g);
         g.paint(g2);
-        save(img, new File(d, "04-monster.png"));       // процедурная тварь
+        save(img, new File(d, "06-monster.png"));         // процедурная тварь в прицеле
 
-        tap(g, 53); g.paint(g2);                       // выстрел
-        save(img, new File(d, "05-shot.png"));
+        tap(g, 53); g.paint(g2);                          // выстрел с оружием
+        save(img, new File(d, "07-shot.png"));
 
-        tap(g, 42); g.paint(g2);                       // * = карта
-        save(img, new File(d, "06-map.png"));
-        tap(g, 42); g.paint(g2);                       // закрыть карту
+        tap(g, 35); g.paint(g2);                          // # = карта
+        save(img, new File(d, "08-map.png"));
+        tap(g, 35); g.paint(g2);                          // закрыть карту
 
-        tap(g, 35); g.paint(g2);                       // # = очки Virtual Boy
-        save(img, new File(d, "07-virtualboy.png"));
+        tap(g, 42); g.paint(g2);                          // * = очки Virtual Boy
+        save(img, new File(d, "09-virtualboy.png"));
+        Save.clear();
         System.out.println("capture done -> " + dir);
     }
 
@@ -184,7 +206,7 @@ public final class Preview {
         int px = ftx.getInt(g), py = fty.getInt(g);
         int dx = fdx.getInt(g) >> 12, dy = fdy.getInt(g) >> 12;
         int mx = px, my = py;
-        for (int step = 1; step <= 4; step++) {
+        for (int step = 1; step <= 2; step++) {
             int nx = px + dx * step, ny = py + dy * step;
             if (lv.isWall(nx, ny)) break;   // не ставить за стеной
             mx = nx; my = ny;

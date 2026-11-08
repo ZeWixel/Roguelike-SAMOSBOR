@@ -1,5 +1,9 @@
 package samosbor;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import javax.microedition.lcdui.Canvas;
 import javax.microedition.lcdui.Display;
 import javax.microedition.lcdui.Graphics;
@@ -8,32 +12,42 @@ import javax.microedition.lcdui.Graphics;
  * ГИГАХРУЩЁВКА: САМОСБОР (J2ME / MIDP 2.0)
  *
  * Геймплей — по образцу Insmouse no Yakata (Virtual Boy, 1995):
- *  - вид от первого лица, рейкастинг, перемещение ПО КЛЕТКАМ, поворот на 90°;
- *  - два «D-pad»: левый — движение/поворот, правый — свободный прицел;
- *  - на каждом этаже: ключ-пропуск, гермодверь, жёсткий таймер до Самосбора;
- *  - белый шар открывает карту, чёрный показывает предметы;
- *  - 6 патронов в магазине, ручная перезарядка, сердечки/пищконцентрат;
- *  - 13 этажей из процедурно ветвящейся Гигахрущёвки, 4 концовки;
- *  - пароль из 4 символов вместо сохранения.
+ * вид от первого лица, перемещение по клеткам, поворот 90°, ключ-пропуск,
+ * гермодверь, таймер Самосбора, белый/чёрный шары, редкие патроны, 13 этажей,
+ * 4 концовки. Пароли заменены автосохранением в RMS.
+ *
+ * Управление:
+ *   2/8/4/6  — шаг/поворот (или прицел, если оружие в руках)
+ *   7        — достать/убрать оружие и перейти в режим прицеливания
+ *   5        — выстрел (только с оружием), 0 — перезарядка
+ *   *        — очки Virtual Boy, # — карта
+ *   в меню 2/8 — перелистывание пунктов, 5 — выбор, 4/6 — значение
  */
 public final class Game extends Canvas {
 
     private static final int FP = Fx.FP;
 
-    // Состояния
-    private static final int TITLE = 0, PASSWORD = 1, BRIEF = 2, PLAY = 3,
-            HELP = 4, ENDING = 5, DEAD = 6;
+    private static final int TITLE = 0, HELP = 1, BRIEF = 2, PLAY = 3,
+            ENDING = 4, DEAD = 5;
 
-    // Логические кнопки
     private static final int A_UP = 0, A_DOWN = 1, A_LEFT = 2, A_RIGHT = 3,
-            A_FIRE = 4, A_AIM_LU = 5, A_AIM_RU = 6, A_AIM_LD = 7,
-            A_AIM_RD = 8, A_MAP = 9, A_RELOAD = 10, A_VB = 11, A_COUNT = 12;
+            A_FIRE = 4, A_AIM = 5, A_MAP = 6, A_VB = 7, A_RELOAD = 8,
+            A_OPT_L = 9, A_OPT_R = 10, A_BACK = 11, A_COUNT = 12;
 
-    // Цвета HUD
+    private static final int SAVE_MAGIC = 0x47485332; // "GHS2"
+    private static final int SAVE_VERSION = 3;
+    private static final int AUTOSAVE_MS = 12000;
+    private static final int DAMAGE_COOLDOWN = 2600;
+    private static final int SIREN_MS = 30000;
+
     private static final int C_WHITE = 0xfff0e6d0, C_RED = 0xffe05050,
             C_PURPLE = 0xffb952c7, C_YELLOW = 0xffd8cf40,
             C_GREEN = 0xff8ec06a, C_DARK = 0xff180e20,
             C_GREY = 0xff8d8e8e;
+
+    private static final String[] MENU = {
+        "НОВЫЙ ЗАБЕГ", "ПРОДОЛЖИТЬ", "УПРАВЛЕНИЕ", "МУЗЫКА: ВКЛ", "ВЫХОД"
+    };
 
     private final Main midlet;
     private int w, h, viewH, hudH;
@@ -41,27 +55,24 @@ public final class Game extends Canvas {
     private final Renderer renderer;
     private final boolean[] held = new boolean[A_COUNT];
     private final Raster[] titleMonsters = new Raster[3];
+    private final Raster weaponSprite;
+    private Audio audio;
 
     private int K_UP = -1, K_DOWN = -2, K_LEFT = -3, K_RIGHT = -4, K_FIRE = -5;
 
     private int state = TITLE;
-    private long stateSince, lastFrame, lastDamage, flashUntil, messageUntil,
-            nextNav, nextDistCompute, nextRespawnCheck;
+    private int menuIndex, endMenuIndex;
+    private long stateSince, lastFrame, lastDamage, flashUntil, muzzleUntil,
+            lastShotAt, messageUntil, nextNav, nextDistCompute, nextRespawnCheck,
+            lastSaveAt;
     private String message = "";
     private int messageColor = C_WHITE;
     private String deathReason = "";
-    private boolean showMap;
+    private boolean showMap, aiming, musicOn = true, sirenDone, hasSave;
 
-    // Пробег
     private int runSeed, stage, floorNumber, deaths, fastFloors, totalTimeLeft,
             minFloor, ending;
-    private boolean usedPassword;
-    private String password = "AAAA";
-    private char[] passChars = {'A', 'A', 'A', 'A'};
-    private int passSlot;
-    private Rng aiRng;
 
-    // Уровень и игрок
     private Level level;
     private long timeLeftMs;
     private int playerTX, playerTY, posX, posY, dirDeg, dirX, dirY, planeX, planeY;
@@ -70,10 +81,10 @@ public final class Game extends Canvas {
     private boolean hasKey, hasWhite, hasBlack;
     private int planeLen;
 
-    // Кэш строк HUD (без аллокаций в игровом цикле)
     private String hudLine1 = "", hudLine2 = "", hudLine3 = "", hudLine4 = "", hudLine5 = "";
     private int hudSecond = -1;
     private boolean hudDirty = true;
+    private Rng aiRng;
 
     public Game(Main midlet) {
         this.midlet = midlet;
@@ -104,10 +115,19 @@ public final class Game extends Canvas {
         for (int i = 0; i < titleMonsters.length; i++) {
             titleMonsters[i] = Monster.create(r, i).frames[0];
         }
+        weaponSprite = makeWeapon();
+
+        try {
+            audio = new Audio();
+        } catch (Throwable t) {
+            audio = null; // телефона без MMAPI — игра без звука
+        }
 
         aimX = w >> 1;
         aimY = viewH >> 1;
         aiRng = new Rng(0x1234abcdL);
+        hasSave = Save.hasAuto();
+        music(0);
         stateSince = lastFrame = System.currentTimeMillis();
         repaint();
     }
@@ -122,11 +142,10 @@ public final class Game extends Canvas {
         }
     }
 
-    /** Определение раскладки D-pad — как classes.Keyboard из Mecasting. */
     private void detectKeypad() {
-        if (isSelect(-26)) {            // Siemens
+        if (isSelect(-26)) {
             K_LEFT = -61; K_RIGHT = -62; K_DOWN = -60; K_UP = -59; K_FIRE = -26;
-        } else if (isSelect(-20)) {     // Motorola
+        } else if (isSelect(-20)) {
             K_LEFT = -2; K_RIGHT = -5; K_DOWN = -6; K_UP = -1; K_FIRE = -20;
         }
     }
@@ -137,13 +156,13 @@ public final class Game extends Canvas {
         if (k == K_LEFT || k == Canvas.LEFT || k == Canvas.KEY_NUM4 || k == '4') return A_LEFT;
         if (k == K_RIGHT || k == Canvas.RIGHT || k == Canvas.KEY_NUM6 || k == '6') return A_RIGHT;
         if (k == K_FIRE || k == Canvas.FIRE || k == Canvas.KEY_NUM5 || k == '5') return A_FIRE;
-        if (k == Canvas.KEY_NUM1 || k == '1') return A_AIM_LU;
-        if (k == Canvas.KEY_NUM3 || k == '3') return A_AIM_RU;
-        if (k == Canvas.KEY_NUM7 || k == '7') return A_AIM_LD;
-        if (k == Canvas.KEY_NUM9 || k == '9') return A_AIM_RD;
-        if (k == Canvas.KEY_STAR || k == '*') return A_MAP;
+        if (k == Canvas.KEY_NUM7 || k == '7') return A_AIM;
+        if (k == Canvas.KEY_POUND || k == '#') return A_MAP;
+        if (k == Canvas.KEY_STAR || k == '*') return A_VB;
         if (k == Canvas.KEY_NUM0 || k == '0') return A_RELOAD;
-        if (k == Canvas.KEY_POUND || k == '#') return A_VB;
+        if (k == Canvas.KEY_NUM1 || k == '1') return A_OPT_L;
+        if (k == Canvas.KEY_NUM3 || k == '3') return A_OPT_R;
+        if (k == Canvas.KEY_NUM9 || k == '9') return A_BACK;
         try {
             int ga = getGameAction(k);
             if (ga == Canvas.UP) return A_UP;
@@ -169,62 +188,154 @@ public final class Game extends Canvas {
     }
 
     protected void keyRepeated(int k) {
-        // повтор движения обрабатывается своим таймером в update()
+        // повтор реализован своим таймером в update()
+    }
+
+    protected void hideNotify() {
+        autosave();
+    }
+
+    public void onPause() {
+        autosave();
     }
 
     private void press(int a) {
         long now = System.currentTimeMillis();
         if (a == A_VB) {
             renderer.setVbMode(!renderer.vbMode);
+            play(Audio.MENU);
             setMessage(renderer.vbMode ? "ОЧКИ VIRTUAL BOY" : "ОБЫЧНЫЙ ЭКРАН", C_PURPLE);
+            return;
         }
         switch (state) {
             case TITLE:
-                if (a == A_FIRE) newGame();
-                else if (a == A_RELOAD) { state = PASSWORD; passSlot = 0; stateSince = now; }
-                else if (a == A_AIM_RU || a == A_MAP) { state = HELP; stateSince = now; }
-                break;
-            case PASSWORD:
-                if (a == A_UP) cyclePass(1);
-                else if (a == A_DOWN) cyclePass(-1);
-                else if (a == A_LEFT) { passSlot = (passSlot + 3) & 3; }
-                else if (a == A_RIGHT) { passSlot = (passSlot + 1) & 3; }
-                else if (a == A_MAP) { state = TITLE; stateSince = now; }
-                else if (a == A_FIRE) {
-                    String s = new String(passChars);
-                    if (continueFromPassword(s)) setMessage("ПАРОЛЬ ПРИНЯТ", C_GREEN);
-                    else setMessage("ПАРОЛЬ НЕВЕРЕН", C_RED);
+                if (a == A_UP) {
+                    menuIndex = (menuIndex + MENU.length - 1) % MENU.length;
+                    play(Audio.MENU);
+                } else if (a == A_DOWN) {
+                    menuIndex = (menuIndex + 1) % MENU.length;
+                    play(Audio.MENU);
+                } else if (a == A_LEFT || a == A_RIGHT || a == A_OPT_L || a == A_OPT_R) {
+                    if (menuIndex == 3) toggleMusic();
+                    else play(Audio.MENU);
+                } else if (a == A_FIRE) {
+                    selectMenu(now);
                 }
                 break;
             case HELP:
-                if (a == A_FIRE || a == A_MAP || a == A_RELOAD) { state = TITLE; stateSince = now; }
+                if (a == A_FIRE || a == A_BACK) {
+                    state = TITLE;
+                    stateSince = now;
+                    play(Audio.MENU);
+                }
                 break;
             case BRIEF:
-                if (a == A_FIRE || a == A_MAP) { state = PLAY; stateSince = now; hudDirty = true; }
+                if (a == A_FIRE) {
+                    state = PLAY;
+                    stateSince = now;
+                    hudDirty = true;
+                    play(Audio.DOOR);
+                } else if (a == A_BACK) {
+                    state = TITLE;
+                    stateSince = now;
+                }
                 break;
             case PLAY:
-                if (a == A_FIRE) fire(now);
-                else if (a == A_RELOAD) reload(now);
-                else if (a == A_MAP) { showMap = !showMap; setMessage(showMap ? "КАРТА ЭТАЖА" : "", C_GREEN); }
-                else if (a == A_UP || a == A_DOWN || a == A_LEFT || a == A_RIGHT) {
-                    navigate(a, now);
-                    nextNav = now + 230;
+                if (a == A_AIM) {
+                    aiming = !aiming;
+                    hudDirty = true;
+                    play(Audio.DRAW);
+                    setMessage(aiming ? "ОРУЖИЕ ГОТОВО: ПРИЦЕЛ" : "ОРУЖИЕ УБРАНО", C_YELLOW);
+                } else if (a == A_FIRE) {
+                    if (aiming) fire(now);
+                    else setMessage("СНАЧАЛА 7 - ДОСТАТЬ ОРУЖИЕ", C_YELLOW);
+                } else if (a == A_RELOAD) {
+                    reload(now);
+                } else if (a == A_MAP) {
+                    showMap = !showMap;
+                    play(Audio.MENU);
+                    setMessage(showMap ? "КАРТА ЭТАЖА" : "", C_GREEN);
+                } else if (a == A_UP || a == A_DOWN || a == A_LEFT || a == A_RIGHT) {
+                    if (!aiming) {
+                        navigate(a, now);
+                        nextNav = now + 230;
+                    }
                 }
                 break;
             case ENDING:
             case DEAD:
-                if (a == A_FIRE) newGame();
-                else if (a == A_RELOAD) { state = PASSWORD; passSlot = 0; stateSince = now; }
+                int n = endMenuCount();
+                if (a == A_UP) {
+                    endMenuIndex = (endMenuIndex + n - 1) % n;
+                    play(Audio.MENU);
+                } else if (a == A_DOWN) {
+                    endMenuIndex = (endMenuIndex + 1) % n;
+                    play(Audio.MENU);
+                } else if (a == A_FIRE) {
+                    selectEndMenu(now);
+                }
                 break;
             default:
                 break;
         }
     }
 
-    private void cyclePass(int d) {
-        int i = Passwords.ALPHABET.indexOf(passChars[passSlot]);
-        i = (i + d + Passwords.ALPHABET.length()) % Passwords.ALPHABET.length();
-        passChars[passSlot] = Passwords.ALPHABET.charAt(i);
+    private void selectMenu(long now) {
+        switch (menuIndex) {
+            case 0:
+                newGame();
+                play(Audio.DOOR);
+                break;
+            case 1:
+                if (Save.hasAuto() && continueGame()) play(Audio.DOOR);
+                else setMessage("СОХРАНЕНИЯ НЕТ", C_RED);
+                break;
+            case 2:
+                state = HELP;
+                stateSince = now;
+                play(Audio.MENU);
+                break;
+            case 3:
+                toggleMusic();
+                break;
+            default:
+                if (midlet != null) midlet.notifyDestroyed();
+                else { state = TITLE; menuIndex = 0; }
+                break;
+        }
+    }
+
+    private void toggleMusic() {
+        musicOn = !musicOn;
+        if (audio != null) audio.setEnabled(musicOn);
+        if (musicOn) music(0);
+        else music(-1);
+        play(Audio.MENU);
+        setMessage(musicOn ? "ЗВУК ВКЛЮЧЁН" : "ЗВУК ВЫКЛЮЧЕН", C_YELLOW);
+    }
+
+    private int endMenuCount() {
+        return state == DEAD ? 3 : 2;
+    }
+
+    private void selectEndMenu(long now) {
+        if (state == DEAD) {
+            if (endMenuIndex == 0) newGame();
+            else if (endMenuIndex == 1) {
+                if (!continueGame()) setMessage("СОХРАНЕНИЯ НЕТ", C_RED);
+            } else goTitle();
+        } else {
+            if (endMenuIndex == 0) newGame();
+            else goTitle();
+        }
+        play(Audio.MENU);
+    }
+
+    private void goTitle() {
+        state = TITLE;
+        menuIndex = 0;
+        hasSave = Save.hasAuto();
+        music(0);
     }
 
     // ------------------------------------------------------------- игровой цикл
@@ -246,24 +357,24 @@ public final class Game extends Canvas {
     }
 
     private void update(long dt, long now) {
-        // Правый D-pad: диагональные клавиши 1/3/7/9, пары дают прямое направление
-        int ax = 0, ay = 0;
-        if (held[A_AIM_LU]) { ax--; ay--; }
-        if (held[A_AIM_RU]) { ax++; ay--; }
-        if (held[A_AIM_LD]) { ax--; ay++; }
-        if (held[A_AIM_RD]) { ax++; ay++; }
-        if (ax != 0 || ay != 0) {
-            int step = (int) (150 * dt / 1000);
-            if (step < 1) step = 1;
-            aimX += ax * step;
-            aimY += ay * step;
-            if (aimX < 2) aimX = 2;
-            if (aimX > w - 3) aimX = w - 3;
-            if (aimY < 2) aimY = 2;
-            if (aimY > viewH - 3) aimY = viewH - 3;
-        }
-        // Левый D-pad: удержание = повтор шага
-        if (now >= nextNav) {
+        if (aiming) {
+            // Правый «D-pad» на кнопках 2/4/6/8: прицел двигается непрерывно.
+            int ax = 0, ay = 0;
+            if (held[A_UP]) ay--;
+            if (held[A_DOWN]) ay++;
+            if (held[A_LEFT]) ax--;
+            if (held[A_RIGHT]) ax++;
+            if (ax != 0 || ay != 0) {
+                int step = (int) (150 * dt / 1000);
+                if (step < 1) step = 1;
+                aimX += ax * step;
+                aimY += ay * step;
+                if (aimX < 2) aimX = 2;
+                if (aimX > w - 3) aimX = w - 3;
+                if (aimY < 2) aimY = 2;
+                if (aimY > viewH - 3) aimY = viewH - 3;
+            }
+        } else if (now >= nextNav) {
             int a = -1;
             if (held[A_UP]) a = A_UP;
             else if (held[A_DOWN]) a = A_DOWN;
@@ -281,18 +392,31 @@ public final class Game extends Canvas {
             die(now);
             return;
         }
+        if (!sirenDone && timeLeftMs < SIREN_MS) {
+            sirenDone = true;
+            play(Audio.SIREN);
+            music(1);
+            setMessage("СИРЕНА! САМОСБОР ЧЕРЕЗ 30", C_RED);
+        }
         if ((int) (timeLeftMs / 1000) != hudSecond) hudDirty = true;
         updateMonsters(dt, now);
+        if (now - lastSaveAt >= AUTOSAVE_MS) autosave();
         if (messageUntil != 0 && now > messageUntil) {
             message = "";
             messageUntil = 0;
         }
     }
 
+    /**
+     * ИИ как в Insmouse no Yakata: твари медленно бродят возле своего места,
+     * замечают игрока только в прямой видимости на 3–5 клеток, перед укусом
+     * замирают в позе выпада (0.8 с), снимают ровно ОДНО сердце и после
+     * попадания шарахаются в сторону. Никакой погони через весь этаж.
+     */
     private void updateMonsters(long dt, long now) {
         if (now >= nextDistCompute) {
             level.computeDist(playerTX, playerTY);
-            nextDistCompute = now + 320;
+            nextDistCompute = now + 600;
         }
         for (int i = 0; i < level.monsterCount; i++) {
             Monster m = level.monsters[i];
@@ -301,50 +425,107 @@ public final class Game extends Canvas {
                     int p = level.randomFloor(7);
                     m.place(p % level.w, p / level.w);
                     m.respawnAt = 0;
-                    nextRespawnCheck = now + 1500;
+                    nextRespawnCheck = now + 2000;
                 }
                 continue;
             }
             m.advance((int) dt);
+
+            int dx = m.tileX - playerTX; if (dx < 0) dx = -dx;
+            int dy = m.tileY - playerTY; if (dy < 0) dy = -dy;
+            int manhattan = dx + dy;
+            boolean visible = manhattan <= m.sight &&
+                    level.lineOfSight(m.tileX, m.tileY, playerTX, playerTY);
+            if (visible) m.noticedUntil = now + 1600;
+
+            // Замах: тварь замирает, и удар можно переждать/отойти.
+            if (m.windupUntil != 0) {
+                if (now >= m.windupUntil) {
+                    m.windupUntil = 0;
+                    int ddx = m.tileX - playerTX; if (ddx < 0) ddx = -ddx;
+                    int ddy = m.tileY - playerTY; if (ddy < 0) ddy = -ddy;
+                    if (ddx + ddy <= 1) damage(1, now);
+                }
+                continue;
+            }
+
+            // После выстрела тварь «отпрыгивает» от прицела (как в оригинале).
+            if (m.fleeUntil > now) {
+                if (!m.moving && now >= m.nextThink) {
+                    m.nextThink = now + 430;
+                    int bestD = manhattan, bx = m.tileX, by = m.tileY;
+                    for (int k = 0; k < 4; k++) {
+                        int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
+                        int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
+                        if (level.isWall(nx, ny) || monsterOccupies(nx, ny, m)) continue;
+                        int d = (nx > playerTX ? nx - playerTX : playerTX - nx) +
+                                (ny > playerTY ? ny - playerTY : playerTY - ny);
+                        if (d > bestD) { bestD = d; bx = nx; by = ny; }
+                    }
+                    if (bx != m.tileX || by != m.tileY) {
+                        m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
+                    }
+                }
+                continue;
+            }
+
+            // Укус только вплотную, с паузой между атаками.
+            if (manhattan <= 1 && visible && now >= m.nextAttack) {
+                m.windupUntil = now + 800;
+                m.nextAttack = now + m.attackCooldown;
+                m.frameIndex = 1;
+                continue;
+            }
+
             if (!m.moving && now >= m.nextThink) {
-                m.nextThink = now + m.speedMs / 2 + aiRng.nextInt(180);
-                int cur = level.idx(m.tileX, m.tileY);
-                int d = level.dist[cur];
-                if (d >= 0 && d <= m.sight) {
-                    int bestD = d, bx = m.tileX, by = m.tileY;
+                m.nextThink = now + m.speedMs + aiRng.nextInt(500);
+                if (visible || m.noticedUntil > now) {
+                    int curDist = level.dist[level.idx(m.tileX, m.tileY)];
+                    int bestD = curDist, bx = m.tileX, by = m.tileY;
                     for (int k = 0; k < 4; k++) {
                         int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
                         int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
                         if (!level.inside(nx, ny)) continue;
-                        if (level.isBreakable(nx, ny) && aiRng.chance(22)) {
+                        // редко проламывает трещину, только когда игрок совсем рядом
+                        if (level.isBreakable(nx, ny) && manhattan <= 2 && aiRng.chance(3)) {
                             if (level.breakWall(nx, ny)) {
                                 level.computeDist(playerTX, playerTY);
-                                nextDistCompute = now + 320;
+                                nextDistCompute = now + 600;
                             }
                         }
-                        if (level.isWall(nx, ny)) continue;
+                        if (nx == playerTX && ny == playerTY) continue; // на игрока не наступаем
+                        if (level.isWall(nx, ny) || monsterOccupies(nx, ny, m)) continue;
                         int nd = level.dist[level.idx(nx, ny)];
                         if (nd >= 0 && nd < bestD) { bestD = nd; bx = nx; by = ny; }
                     }
                     if (bx != m.tileX || by != m.tileY) {
                         m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
                     }
-                } else if (aiRng.chance(22)) {
+                } else if (now >= m.nextWander && aiRng.chance(28)) {
+                    // Медленное блуждание в радиусе 3 клеток от «дома».
+                    m.nextWander = now + 2200 + aiRng.nextInt(1600);
                     int k = aiRng.nextInt(4);
                     int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
                     int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
-                    if (!level.isWall(nx, ny)) {
+                    int hdx = nx - m.homeX; if (hdx < 0) hdx = -hdx;
+                    int hdy = ny - m.homeY; if (hdy < 0) hdy = -hdy;
+                    if (hdx + hdy <= 3 && !level.isWall(nx, ny) &&
+                            !monsterOccupies(nx, ny, m)) {
                         m.toX = nx; m.toY = ny; m.moveT = 0; m.moving = true;
                     }
                 }
             }
-            int dx = m.tileX - playerTX; if (dx < 0) dx = -dx;
-            int dy = m.tileY - playerTY; if (dy < 0) dy = -dy;
-            if (dx + dy <= 1 && now >= m.nextAttack) {
-                m.nextAttack = now + 950;
-                damage(m.damage, now);
-            }
         }
+    }
+
+    private boolean monsterOccupies(int tx, int ty, Monster self) {
+        for (int i = 0; i < level.monsterCount; i++) {
+            Monster o = level.monsters[i];
+            if (o == self || !o.alive) continue;
+            if (o.tileX == tx && o.tileY == ty) return true;
+            if (o.moving && o.toX == tx && o.toY == ty) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ действия
@@ -360,27 +541,24 @@ public final class Game extends Canvas {
         int cell = level.idx(tx, ty);
         byte t = level.tile[cell];
         if (t == Level.EXIT) {
-            if (hasKey) {
-                finishLevel(now);
-            } else {
-                setMessage("ГЕРМОДВЕРЬ: НУЖЕН ПРОПУСК", C_YELLOW);
-            }
+            if (hasKey) finishLevel(now);
+            else setMessage("ГЕРМОДВЕРЬ: НУЖЕН ПРОПУСК", C_YELLOW);
             return;
         }
         if (t != Level.FLOOR) {
             setMessage("БЕТОН. НЕ ПРОЙТИ", C_GREY);
             return;
         }
-        Monster blocker = monsterAt(tx, ty);
-        if (blocker != null) {
+        if (monsterOccupies(tx, ty, null)) {
+            // В оригинале тварь просто ЗАКРЫВАЕТ коридор — урона от толчка нет.
             setMessage("ТВАРЬ ЗАКРЫЛА КОРИДОР", C_RED);
-            damage(blocker.damage, now);
             return;
         }
         playerTX = tx;
         playerTY = ty;
         posX = tx * FP + FP / 2;
         posY = ty * FP + FP / 2;
+        play(Audio.STEP);
         for (int yy = ty - 1; yy <= ty + 1; yy++) {
             for (int xx = tx - 1; xx <= tx + 1; xx++) level.markSeen(xx, yy);
         }
@@ -389,17 +567,8 @@ public final class Game extends Canvas {
         level.computeDist(playerTX, playerTY);
     }
 
-    private Monster monsterAt(int tx, int ty) {
-        for (int i = 0; i < level.monsterCount; i++) {
-            Monster m = level.monsters[i];
-            if (!m.alive) continue;
-            if (m.tileX == tx && m.tileY == ty) return m;
-            if (m.moving && m.toX == tx && m.toY == ty) return m;
-        }
-        return null;
-    }
-
     private void pickup(int type, int item, long now) {
+        play(Audio.PICKUP);
         switch (type) {
             case Level.ITEM_KEY:
                 hasKey = true;
@@ -422,19 +591,18 @@ public final class Game extends Canvas {
                 if (health < 5) health++;
                 setMessage("ПИЩКОНЦЕНТРАТ: +1 СЕРДЦЕ", C_GREEN);
                 break;
-            case Level.ITEM_CLOCK:
+            default:
                 timeLeftMs += 20000;
                 setMessage("ТАЛОН: +20 СЕКУНД", C_GREEN);
-                break;
-            default:
                 break;
         }
         hudDirty = true;
         level.removeItem(item);
+        autosave();
     }
 
     private void fire(long now) {
-        if (showMap) return;
+        if (showMap || !aiming) return;
         if (magazine <= 0) {
             setMessage("МАГАЗИН ПУСТ: КЛАВИША 0", C_YELLOW);
             return;
@@ -442,6 +610,9 @@ public final class Game extends Canvas {
         magazine--;
         hudDirty = true;
         flashUntil = now + 55;
+        muzzleUntil = now + 120;
+        lastShotAt = now;
+        play(Audio.SHOT);
         int best = -1, bestDepth = Integer.MAX_VALUE;
         for (int i = 0; i < renderer.sprCount; i++) {
             if (aimX >= renderer.sprLeft[i] && aimX < renderer.sprRight[i] &&
@@ -460,12 +631,19 @@ public final class Game extends Canvas {
         m.hp -= 2 + stage / 4;
         if (m.hp <= 0) {
             m.alive = false;
-            m.respawnAt = now + 14000;
+            m.respawnAt = now + 20000;
+            play(Audio.KILL);
             setMessage("ТВАРЬ РАЗОБРАНА НА ЧАСТИ", C_GREEN);
             buzz(80);
         } else {
+            // «После выстрела тварь внезапно уходит в сторону от прицела».
+            m.fleeUntil = now + 2600;
+            m.windupUntil = 0;
+            m.nextThink = now;
+            play(Audio.HIT);
             setMessage("ПОПАДАНИЕ: " + m.name, C_YELLOW);
         }
+        autosave();
     }
 
     private void reload(long now) {
@@ -478,20 +656,22 @@ public final class Game extends Canvas {
         magazine += take;
         reserve -= take;
         hudDirty = true;
+        play(Audio.RELOAD);
         setMessage("ПЕРЕЗАРЯДКА +" + take, C_YELLOW);
     }
 
     private void damage(int dmg, long now) {
-        if (now - lastDamage < 750) return;
+        if (now - lastDamage < DAMAGE_COOLDOWN) return;
         lastDamage = now;
         health -= dmg;
         hudDirty = true;
         flashUntil = now + 180;
+        play(Audio.HURT);
         if (health <= 0) {
             deathReason = "ТВАРИ ДОСТАЛИ ЛИКВИДАТОРА";
             die(now);
         } else {
-            setMessage("УРОН! СЕРДЕЦ: " + health, C_RED);
+            setMessage("УКУС! СЕРДЕЦ: " + health, C_RED);
             buzz(120);
         }
     }
@@ -499,13 +679,18 @@ public final class Game extends Canvas {
     private void die(long now) {
         deaths++;
         ending = Endings.DEAD;
-        password = Passwords.encode(runSeed, stage, floorNumber);
+        // Откат к началу этажа — автосейв не даёт попасть в смертельную петлю.
+        Save.copyFloorToAuto();
+        hasSave = Save.hasAuto();
         state = DEAD;
+        endMenuIndex = 0;
         stateSince = now;
+        music(-1);
         buzz(250);
     }
 
     private void finishLevel(long now) {
+        play(Audio.DOOR);
         int pct = (int) (100L * timeLeftMs / (level.timeLimitSec * 1000L));
         if (pct > 50) {
             floorNumber++;
@@ -521,11 +706,14 @@ public final class Game extends Canvas {
         if (floorNumber < minFloor) minFloor = floorNumber;
         stage++;
         if (stage >= 13) {
-            ending = Endings.choose(deaths, usedPassword, totalTimeLeft,
-                    magazine + reserve, fastFloors, minFloor);
-            password = Passwords.encode(runSeed, stage, floorNumber);
+            ending = Endings.choose(deaths, totalTimeLeft, magazine + reserve,
+                    fastFloors, minFloor);
+            Save.clear();
+            hasSave = false;
             state = ENDING;
+            endMenuIndex = 0;
             stateSince = now;
+            music(-1);
             buzz(200);
         } else {
             buildLevel();
@@ -535,6 +723,7 @@ public final class Game extends Canvas {
     }
 
     private void newGame() {
+        Save.clear();
         runSeed = 0x1a2b000 | (int) (System.currentTimeMillis() & 1023);
         stage = 0;
         floorNumber = 556;
@@ -542,34 +731,28 @@ public final class Game extends Canvas {
         fastFloors = 0;
         totalTimeLeft = 0;
         minFloor = 556;
-        usedPassword = false;
         deathReason = "";
         resetPlayer();
         buildLevel();
-        showMap = false;
         state = BRIEF;
         stateSince = System.currentTimeMillis();
         aiRng = new Rng(runSeed ^ 0x5bf03635L);
+        hasSave = true;
+        music(0);
     }
 
-    private boolean continueFromPassword(String s) {
-        int[] out = new int[3];
-        if (!Passwords.decode(s, out)) return false;
-        runSeed = out[0];
-        stage = out[1];
-        floorNumber = out[2];
-        deaths = 0;
-        fastFloors = 0;
-        totalTimeLeft = 0;
-        minFloor = floorNumber;
-        usedPassword = true;
-        deathReason = "";
-        resetPlayer();
-        buildLevel();
-        showMap = false;
-        state = BRIEF;
+    private boolean continueGame() {
+        byte[] data = Save.readAuto();
+        if (data == null) return false;
+        if (!restore(data)) {
+            Save.clear();
+            hasSave = false;
+            return false;
+        }
+        state = PLAY;
         stateSince = System.currentTimeMillis();
-        aiRng = new Rng(runSeed ^ 0x5bf03635L);
+        music(sirenDone ? 1 : 0);
+        hasSave = true;
         return true;
     }
 
@@ -579,6 +762,7 @@ public final class Game extends Canvas {
         reserve = 6;
         hasKey = hasWhite = hasBlack = false;
         showMap = false;
+        aiming = false;
         message = "";
         messageUntil = 0;
         aimX = w >> 1;
@@ -587,6 +771,8 @@ public final class Game extends Canvas {
         setVectors();
         hudDirty = true;
         lastDamage = 0;
+        lastShotAt = 0;
+        muzzleUntil = 0;
     }
 
     private void buildLevel() {
@@ -597,7 +783,6 @@ public final class Game extends Canvas {
         posY = playerTY * FP + FP / 2;
         setVectors();
         level.computeDist(playerTX, playerTY);
-        // Вход на этаж смотрит ВДОЛЬ коридора, а не в наружную стену.
         int bestD = -1, bestDeg = 0;
         int[] vx = {-1, 0, 1, 0};
         int[] vy = {0, -1, 0, 1};
@@ -612,11 +797,13 @@ public final class Game extends Canvas {
         setVectors();
         level.markSeen(playerTX, playerTY);
         timeLeftMs = level.timeLimitSec * 1000L;
-        password = Passwords.encode(runSeed, stage, floorNumber);
         nextDistCompute = 0;
         nextRespawnCheck = 0;
         hudDirty = true;
         hudSecond = -1;
+        sirenDone = false;
+        music(0);
+        checkpoint();
     }
 
     private void rotate(int delta) {
@@ -637,11 +824,128 @@ public final class Game extends Canvas {
         messageUntil = System.currentTimeMillis() + 1900;
     }
 
+    private void play(int id) {
+        if (audio != null) audio.play(id);
+    }
+
+    private void music(int track) {
+        if (audio != null) audio.music(track);
+    }
+
     private void buzz(int ms) {
         if (midlet == null) return;
         try {
             Display.getDisplay(midlet).vibrate(ms);
         } catch (Exception e) {
+        }
+    }
+
+    // ----------------------------------------------------------- автосохранение
+
+    private byte[] snapshot() throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(8192);
+        DataOutputStream out = new DataOutputStream(bos);
+        out.writeInt(SAVE_MAGIC);
+        out.writeInt(SAVE_VERSION);
+        out.writeInt(runSeed);
+        out.writeInt(stage);
+        out.writeInt(floorNumber);
+        out.writeInt(deaths);
+        out.writeInt(fastFloors);
+        out.writeInt(totalTimeLeft);
+        out.writeInt(minFloor);
+        out.writeInt(health);
+        out.writeInt(magazine);
+        out.writeInt(reserve);
+        out.writeBoolean(hasKey);
+        out.writeBoolean(hasWhite);
+        out.writeBoolean(hasBlack);
+        out.writeBoolean(aiming);
+        out.writeBoolean(renderer.vbMode);
+        out.writeBoolean(musicOn);
+        out.writeLong(timeLeftMs);
+        out.writeInt(playerTX);
+        out.writeInt(playerTY);
+        out.writeInt(dirDeg);
+        out.writeInt(aimX);
+        out.writeInt(aimY);
+        level.write(out);
+        out.flush();
+        return bos.toByteArray();
+    }
+
+    private boolean restore(byte[] data) {
+        DataInputStream in = null;
+        try {
+            in = new DataInputStream(new ByteArrayInputStream(data));
+            if (in.readInt() != SAVE_MAGIC) return false;
+            if (in.readInt() != SAVE_VERSION) return false;
+            runSeed = in.readInt();
+            stage = in.readInt();
+            floorNumber = in.readInt();
+            deaths = in.readInt();
+            fastFloors = in.readInt();
+            totalTimeLeft = in.readInt();
+            minFloor = in.readInt();
+            health = in.readInt();
+            magazine = in.readInt();
+            reserve = in.readInt();
+            hasKey = in.readBoolean();
+            hasWhite = in.readBoolean();
+            hasBlack = in.readBoolean();
+            aiming = in.readBoolean();
+            boolean vb = in.readBoolean();
+            musicOn = in.readBoolean();
+            timeLeftMs = in.readLong();
+            playerTX = in.readInt();
+            playerTY = in.readInt();
+            dirDeg = in.readInt();
+            aimX = in.readInt();
+            aimY = in.readInt();
+            Level restored = Level.restore(in);
+            level = restored;
+            posX = playerTX * FP + FP / 2;
+            posY = playerTY * FP + FP / 2;
+            setVectors();
+            level.computeDist(playerTX, playerTY);
+            renderer.setVbMode(vb);
+            if (audio != null) audio.setEnabled(musicOn);
+            showMap = false;
+            message = "";
+            messageUntil = 0;
+            deathReason = "";
+            hudDirty = true;
+            hudSecond = -1;
+            nextDistCompute = 0;
+            nextRespawnCheck = 0;
+            lastDamage = 0;
+            sirenDone = timeLeftMs < SIREN_MS;
+            lastSaveAt = System.currentTimeMillis();
+            return true;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (in != null) try { in.close(); } catch (Exception e) {}
+        }
+    }
+
+    private void autosave() {
+        if (state == TITLE || state == HELP || state == ENDING || state == DEAD) return;
+        try {
+            byte[] b = snapshot();
+            Save.writeAuto(b);
+            lastSaveAt = System.currentTimeMillis();
+        } catch (Throwable t) {
+        }
+    }
+
+    private void checkpoint() {
+        try {
+            byte[] b = snapshot();
+            Save.writeFloor(b);
+            Save.writeAuto(b);
+            lastSaveAt = System.currentTimeMillis();
+        } catch (Throwable t) {
         }
     }
 
@@ -652,16 +956,16 @@ public final class Game extends Canvas {
         fill(buf, 0xff0d0812);
         switch (state) {
             case TITLE: drawTitle(buf, now); break;
-            case PASSWORD: drawPassword(buf); break;
-            case BRIEF: drawBrief(buf); break;
             case HELP: drawHelp(buf); break;
+            case BRIEF: drawBrief(buf); break;
             case PLAY:
                 renderer.render(level, posX, posY, dirX, dirY, planeX, planeY, now);
+                if (aiming) drawWeapon(buf, now);
                 drawHud(buf, now);
-                drawCrosshair(buf);
+                if (aiming) drawCrosshair(buf);
                 if (showMap) drawMap(buf);
                 else drawMessage(buf);
-                if (now < flashUntil) drawFlash(buf, now);
+                if (now < flashUntil) drawFlash(buf);
                 break;
             case ENDING:
             case DEAD:
@@ -726,8 +1030,93 @@ public final class Game extends Canvas {
         BitmapFont.drawShadow(renderer.screen, w, h, s, x, y, color, scale);
     }
 
+    // --------------------------------------------------------------- оружие 1-е лицо
+
+    private static Raster makeWeapon() {
+        // «Ералашников» ликвидатора: крупный пистолет из нижнего правого угла,
+        // ствол смотрит вверх-вправо к центру прицела.
+        Raster g = new Raster(64, 54);
+        int black = 0xff0b0b10;
+        int metal = 0xff5c606b;
+        int steel = 0xff9fa3ab;
+        int bright = 0xffd6d8dc;
+        int wood = 0xff8a552c;
+        int woodLight = 0xffbd7f3c;
+        int glove = 0xff2f4636;
+        int gloveLight = 0xff528263;
+        int purple = 0xffc65ed4;
+
+        // --- тёмный контур, чтобы оружие читалось на любом фоне ---
+        g.line(26, 36, 50, 4, black, 17);   // ствол
+        g.rect(17, 26, 34, 19, black);      // затвор
+        g.line(25, 39, 15, 53, black, 15); // рукоять
+        g.ellipse(19, 48, 16, 10, black);  // перчатка
+        g.rect(0, 47, 24, 10, black);      // предплечье
+
+        // --- ствол и дульный срез ---
+        g.line(27, 35, 49, 6, metal, 12);
+        g.line(29, 33, 48, 8, steel, 4);
+        g.line(31, 31, 47, 10, bright, 2);
+        g.rect(45, 1, 10, 9, steel);
+        g.rect(47, 3, 6, 5, black);
+        g.rect(48, 4, 4, 3, 0xff303038);
+
+        // --- затворная рама ---
+        g.rect(19, 28, 30, 14, metal);
+        g.rect(20, 29, 28, 3, steel);
+        g.rect(20, 33, 28, 2, bright);
+        g.rect(19, 40, 30, 3, black);
+        for (int i = 0; i < 4; i++) g.rect(23 + i * 6, 35, 3, 3, black);
+
+        // --- прицельные приспособления с фиолетовым индикатором Партии ---
+        g.rect(20, 24, 8, 4, black);
+        g.rect(22, 24, 4, 2, purple);
+        g.rect(44, 17, 4, 5, black);
+        g.rect(45, 18, 2, 3, purple);
+
+        // --- магазин и спусковая скоба ---
+        g.rect(16, 40, 13, 9, metal);
+        g.rect(17, 41, 11, 2, steel);
+        g.rect(30, 41, 12, 3, black);
+        g.rect(40, 40, 3, 6, black);
+
+        // --- рукоять с деревом накладки ---
+        g.line(26, 40, 17, 52, wood, 10);
+        g.line(27, 41, 19, 50, woodLight, 3);
+
+        // --- перчатка ликвидатора ---
+        g.rect(1, 48, 22, 8, glove);
+        g.rect(1, 48, 22, 2, gloveLight);
+        g.ellipse(20, 47, 13, 8, glove);
+        g.ellipse(18, 45, 9, 4, gloveLight);
+        for (int i = 0; i < 4; i++) {
+            g.line(12 + i * 4, 43, 14 + i * 4, 39, gloveLight, 2);
+        }
+        return g;
+    }
+
+    private void drawWeapon(int[] buf, long now) {
+        int scale = 2;
+        int bw = weaponSprite.w * scale;
+        int bh = weaponSprite.h * scale;
+        int x = (w - bw) >> 1;
+        int recoil = (now - lastShotAt < 130) ? 9 : 0;
+        int y = viewH - bh + 10 + recoil;
+        blit(weaponSprite, x, y, scale);
+        if (now < muzzleUntil) {
+            int mx = x + 49 * scale;
+            int my = y + 5 * scale;
+            for (int r = 0; r < 5; r++) {
+                hline(buf, mx - 12 + r, mx + 12 - r, my - 4 + r, 0xffd8cf40);
+                hline(buf, mx - 12 + r, mx + 12 - r, my + 4 - r, 0xffe05050);
+            }
+            box(buf, mx - 4, my - 4, 8, 8, 0xffffe9a8, 0xffffe9a8);
+        }
+    }
+
+    // ----------------------------------------------------------------------- меню
+
     private void drawTitle(int[] buf, long now) {
-        // градиент + «бетонная» текстура фона
         for (int y = 0; y < h; y++) {
             int v = 12 + (y * 22) / h;
             int c = 0xff000000 | (v << 16) | ((v / 2) << 8) | (v + 12);
@@ -738,43 +1127,67 @@ public final class Game extends Canvas {
             int y = (i * 41) % h;
             buf[y * w + x] = 0xff3a2048;
         }
-        int y = 12;
-        center("ГИГАХРУЩЁВКА", y, C_PURPLE, 2);
-        y += 20;
-        center("САМОСБОР: ЛИКВИДАТОР", y, C_WHITE, 1);
-        y += 12;
-        center("J2ME / MIDP 2.0 / 3D ОТ ПЕРВОГО ЛИЦА", y, C_GREY, 1);
+        center("ГИГАХРУЩЁВКА", 8, C_PURPLE, 2);
+        center("САМОСБОР: ЛИКВИДАТОР", 30, C_WHITE, 1);
+        center("J2ME / MIDI / 3D ОТ ПЕРВОГО ЛИЦА", 42, C_GREY, 1);
 
         for (int i = 0; i < titleMonsters.length; i++) {
-            int bx = 14 + i * (w / 3);
-            int by = h - 128 + ((i & 1) == 0 ? 0 : 6);
-            blit(titleMonsters[i], bx, by, 2);
+            blit(titleMonsters[i], 16 + i * (w / 3), 56, 1);
         }
-        box(buf, 6, h - 76, w - 12, 70, 0xff140b1c, C_PURPLE);
-        int my = h - 70;
-        BitmapFont.drawShadow(buf, w, h, "5  НОВЫЙ ЗАБЕГ", 14, my, C_YELLOW, 1);
-        BitmapFont.drawShadow(buf, w, h, "0  ВВЕСТИ ПАРОЛЬ", 14, my + 12, C_WHITE, 1);
-        BitmapFont.drawShadow(buf, w, h, "3  УПРАВЛЕНИЕ", 14, my + 24, C_WHITE, 1);
-        BitmapFont.drawShadow(buf, w, h, "#  ОЧКИ VIRTUAL BOY", 14, my + 36, C_GREY, 1);
-        BitmapFont.drawShadow(buf, w, h, "13 ЭТАЖЕЙ / 4 КОНЦОВКИ", 14, my + 50, C_PURPLE, 1);
+
+        int boxY = 116;
+        box(buf, 6, boxY, w - 12, h - boxY - 14, 0xff140b1c, C_PURPLE);
+        for (int i = 0; i < MENU.length; i++) {
+            int y = boxY + 10 + i * 19;
+            if (i == menuIndex) {
+                box(buf, 10, y - 3, w - 20, 17, 0xff3a2048, C_YELLOW);
+            }
+            String label = MENU[i];
+            if (i == 3) label = musicOn ? "МУЗЫКА: ВКЛ" : "МУЗЫКА: ВЫКЛ";
+            if (i == 1 && !hasSave) label = "ПРОДОЛЖИТЬ - НЕТ СЕЙВА";
+            int c = i == menuIndex ? C_YELLOW :
+                    ((i == 1 && !hasSave) ? C_GREY : C_WHITE);
+            BitmapFont.drawShadow(buf, w, h, (i == menuIndex ? ">" : " "), 14, y, c, 1);
+            BitmapFont.drawShadow(buf, w, h, label, 26, y, c, 1);
+        }
+        int fy = h - 28;
+        BitmapFont.drawShadow(buf, w, h, "2/8 ВЫБОР  5 OK  4/6 ЗНАЧЕНИЕ", 12, fy, C_GREY, 1);
+        BitmapFont.drawShadow(buf, w, h,
+                hasSave ? "АВТОСЕЙВ: ЕСТЬ  * VB" : "АВТОСЕЙВ: НЕТ  * VB",
+                12, fy + 11, hasSave ? C_GREEN : C_GREY, 1);
+        if (message.length() > 0) {
+            BitmapFont.drawShadow(buf, w, h, message, 12, boxY - 12, messageColor, 1);
+        }
     }
 
-    private void drawPassword(int[] buf) {
-        fill(buf, 0xff140b1c);
-        center("ПАРОЛЬ ЭТАЖА", 18, C_PURPLE, 2);
-        center("КАК В INSMOUSE NO YAKATA", 44, C_GREY, 1);
-        box(buf, 10, 62, w - 20, 74, 0xff0d0812, C_PURPLE);
-        for (int i = 0; i < 4; i++) {
-            int x = 20 + i * ((w - 40) / 4);
-            int c = i == passSlot ? C_YELLOW : C_GREY;
-            box(buf, x, 76, 34, 44, i == passSlot ? 0xff3a2048 : 0xff1a1022, c);
-            String s = new String(new char[]{passChars[i]});
-            BitmapFont.drawShadow(buf, w, h, s, x + 10, 88, C_WHITE, 2);
+    private void drawHelp(int[] buf) {
+        fill(buf, 0xff120a1a);
+        center("УПРАВЛЕНИЕ", 8, C_PURPLE, 2);
+        int y = 34;
+        String[] lines = {
+            "ЛЕВЫЙ РЕЖИМ (ХОДЬБА)",
+            "2 ВПЕРЁД  8 НАЗАД",
+            "4 ПОВОРОТ 90  6 ПОВОРОТ 90",
+            "",
+            "7 ДОСТАТЬ ОРУЖИЕ",
+            "В РЕЖИМЕ ПРИЦЕЛА:",
+            "2/4/6/8 ДВИГАЮТ ПРИЦЕЛ",
+            "5 ОГОНЬ  0 ПЕРЕЗАРЯДКА",
+            "7 УБРАТЬ ОРУЖИЕ",
+            "",
+            "* ОЧКИ VIRTUAL BOY",
+            "# КАРТА ЭТАЖА",
+            "",
+            "ЦЕЛЬ: ПРОПУСК + ГЕРМОДВЕРЬ",
+            "ДО НАЧАЛА САМОСБОРА",
+            "АВТОСОХРАНЕНИЕ КАЖДЫЕ 12 С",
+            "",
+            "5 ИЛИ 9 - НАЗАД"
+        };
+        for (int i = 0; i < lines.length; i++) {
+            int c = (i == 0 || i == 4 || i == 5) ? C_YELLOW : C_WHITE;
+            BitmapFont.drawShadow(buf, w, h, lines[i], 6, y + i * 11, c, 1);
         }
-        center("2/8 БУКВА   4/6 СЛОТ", 146, C_WHITE, 1);
-        center("5 ПРИНЯТЬ   * НАЗАД", 160, C_WHITE, 1);
-        center("ПАРОЛЬ ВЫДАЁТСЯ НА БРИФИНГЕ", 178, C_GREY, 1);
-        center(message, 200, messageColor, 1);
     }
 
     private void drawBrief(int[] buf) {
@@ -782,71 +1195,61 @@ public final class Game extends Canvas {
         for (int y = 0; y < h; y += 8) hline(buf, 0, w - 1, y, 0xff1c1026);
         center("ЭТАЖ " + floorNumber, 16, C_PURPLE, 2);
         center("ЭТАП " + (stage + 1) + " ИЗ 13", 44, C_WHITE, 1);
-        int sec = (int) (level.timeLimitSec);
+        int sec = level.timeLimitSec;
         center("ДО САМОСБОРА: " + two(sec / 60) + ":" + two(sec % 60), 62, C_YELLOW, 1);
-        box(buf, 8, 82, w - 16, 88, 0xff0d0812, C_PURPLE);
+        box(buf, 8, 82, w - 16, 92, 0xff0d0812, C_PURPLE);
         int y = 90;
         BitmapFont.drawShadow(buf, w, h, "ЗАДАЧА: НАЙТИ ПРОПУСК", 14, y, C_WHITE, 1);
         BitmapFont.drawShadow(buf, w, h, "И ОТКРЫТЬ ГЕРМОДВЕРЬ", 14, y + 12, C_WHITE, 1);
         BitmapFont.drawShadow(buf, w, h, "БЕЛЫЙ ШАР - КАРТА", 14, y + 28, C_GREY, 1);
         BitmapFont.drawShadow(buf, w, h, "ЧЁРНЫЙ ШАР - ПРЕДМЕТЫ", 14, y + 40, C_GREY, 1);
-        BitmapFont.drawShadow(buf, w, h, "ТВАРИ СОБРАНЫ ИЗ ЧАСТЕЙ ТЕЛА", 14, y + 56, C_PURPLE, 1);
-        center("ПАРОЛЬ: " + password, 180, C_GREEN, 1);
-        center("5  НАЧАТЬ ЗАБЕГ", 204, C_YELLOW, 1);
-    }
-
-    private void drawHelp(int[] buf) {
-        fill(buf, 0xff120a1a);
-        center("УПРАВЛЕНИЕ", 10, C_PURPLE, 2);
-        int y = 38;
-        String[] lines = {
-            "ЛЕВЫЙ D-PAD (ХОДЬБА)",
-            "2 ВПЕРЁД НА 1 КЛЕТКУ",
-            "8 НАЗАД НА 1 КЛЕТКУ",
-            "4 ПОВОРОТ ВЛЕВО 90",
-            "6 ПОВОРОТ ВПРАВО 90",
-            "",
-            "ПРАВЫЙ D-PAD (ПРИЦЕЛ)",
-            "1 ВВЕРХ-ВЛЕВО  3 ВВЕРХ-ВПРАВО",
-            "7 ВНИЗ-ВЛЕВО   9 ВНИЗ-ВПРАВО",
-            "1+3 ВВЕРХ  7+9 ВНИЗ",
-            "1+7 ВЛЕВО 3+9 ВПРАВО",
-            "",
-            "5 ОГОНЬ   0 ПЕРЕЗАРЯДКА",
-            "* КАРТА   # ОЧКИ VIRTUAL BOY",
-            "",
-            "ЦЕЛЬ: ПРОПУСК + ГЕРМОДВЕРЬ",
-            "ДО НАЧАЛА САМОСБОРА",
-            "5 ИЛИ * - НАЗАД"
-        };
-        for (int i = 0; i < lines.length; i++) {
-            int c = (i == 0 || i == 6) ? C_YELLOW : C_WHITE;
-            BitmapFont.drawShadow(buf, w, h, lines[i], 6, y + i * 11, c, 1);
-        }
+        BitmapFont.drawShadow(buf, w, h, "7 ОРУЖИЕ  # КАРТА  * VB", 14, y + 56, C_PURPLE, 1);
+        BitmapFont.drawShadow(buf, w, h, "ТВАРИ МЕДЛЕННЫ, НО БЛОКИРУЮТ", 14, y + 70, C_GREY, 1);
+        center("АВТОСОХРАНЕНИЕ: ВКЛЮЧЕНО", 182, C_GREEN, 1);
+        center("5  НАЧАТЬ ЗАБЕГ", 206, C_YELLOW, 1);
     }
 
     private void drawEnding(int[] buf, long now) {
         fill(buf, 0xff0d0812);
         for (int i = 0; i < 3; i++) {
             int t = (int) (now / 700 + i);
-            if ((t & 1) == 0) blit(titleMonsters[i], 8 + i * (w / 3), h - 92, 2);
+            if ((t & 1) == 0) blit(titleMonsters[i], 8 + i * (w / 3), h - 104, 1);
         }
         String[] lines = Endings.lines(ending);
-        int y = 10;
         for (int i = 0; i < lines.length; i++) {
             if (lines[i].length() == 0) continue;
             int c = i == 0 ? C_PURPLE : (i == 1 ? C_YELLOW : C_WHITE);
-            center(lines[i], y + i * 12, c, 1);
+            center(lines[i], 8 + i * 12, c, 1);
         }
         if (state == DEAD && deathReason.length() > 0) {
             center(deathReason, 112, C_RED, 1);
         }
-        box(buf, 6, h - 104, w - 12, 54, 0xff140b1c, C_PURPLE);
-        int by = h - 98;
-        BitmapFont.drawShadow(buf, w, h, "ЭТАП " + (stage + 1) + "/13  ЭТАЖ " + floorNumber, 12, by, C_WHITE, 1);
-        BitmapFont.drawShadow(buf, w, h, "БЫСТРЫХ ЭТАЖЕЙ: " + fastFloors, 12, by + 12, C_GREY, 1);
-        BitmapFont.drawShadow(buf, w, h, "ПАРОЛЬ: " + password, 12, by + 24, C_GREEN, 1);
-        BitmapFont.drawShadow(buf, w, h, "5 НОВЫЙ   0 ПАРОЛЬ", 12, by + 38, C_YELLOW, 1);
+        box(buf, 6, 128, w - 12, 40, 0xff140b1c, C_PURPLE);
+        BitmapFont.drawShadow(buf, w, h,
+                "ЭТАП " + (stage + 1) + "/13  ЭТАЖ " + floorNumber +
+                "  БЫСТРЫХ: " + fastFloors, 12, 136, C_WHITE, 1);
+        BitmapFont.drawShadow(buf, w, h,
+                state == DEAD ? "АВТОСЕЙВ: НАЧАЛО ЭТАЖА" : "АВТОСЕЙВ: ЗАБЕГ ЗАВЕРШЁН",
+                12, 150, C_GREEN, 1);
+
+        int n = endMenuCount();
+        int my = 180;
+        box(buf, 6, my - 6, w - 12, n * 19 + 14, 0xff140b1c, C_PURPLE);
+        for (int i = 0; i < n; i++) {
+            int y = my + i * 19;
+            String label;
+            if (state == DEAD) {
+                label = i == 0 ? "НОВЫЙ ЗАБЕГ" :
+                        (i == 1 ? "ПРОДОЛЖИТЬ С ЭТАЖА" : "В ГЛАВНОЕ МЕНЮ");
+            } else {
+                label = i == 0 ? "НОВЫЙ ЗАБЕГ" : "В ГЛАВНОЕ МЕНЮ";
+            }
+            int c = i == endMenuIndex ? C_YELLOW : C_WHITE;
+            if (i == endMenuIndex) box(buf, 10, y - 3, w - 20, 17, 0xff3a2048, C_YELLOW);
+            BitmapFont.drawShadow(buf, w, h, i == endMenuIndex ? ">" : " ", 14, y, c, 1);
+            BitmapFont.drawShadow(buf, w, h, label, 26, y, c, 1);
+        }
+        center("2/8 ВЫБОР   5 OK", h - 16, C_GREY, 1);
     }
 
     // ---------------------------------------------------------------------- HUD
@@ -870,12 +1273,13 @@ public final class Game extends Canvas {
         s2.append("ПАТР "); s2.append(magazine); s2.append("/"); s2.append(reserve);
         s2.append(hasKey ? "  ~ПРОПУСК" : "  ~НЕТ");
         hudLine2 = s2.toString();
-        hudLine3 = "2 ШАГ  8 НАЗАД  4/6 ПОВОРОТ 90";
-        hudLine4 = "1/3/7/9 ПРИЦЕЛ  5 ОГОНЬ  0 ЗАРЯД";
+        hudLine3 = aiming ? "7 УБРАТЬ  2/4/6/8 ПРИЦЕЛ" : "7 ОРУЖИЕ  2/8 ШАГ 4/6 ПОВОРОТ";
+        hudLine4 = "5 ОГОНЬ 0 ЗАРЯД * VB # КАРТА";
         StringBuffer s5 = new StringBuffer();
-        s5.append("* КАРТА  # VB  ЭТАП "); s5.append(stage + 1); s5.append("/13");
-        if (hasWhite) s5.append("  W");
-        if (hasBlack) s5.append("  B");
+        s5.append("ЭТАП "); s5.append(stage + 1); s5.append("/13  АВТОСЕЙВ");
+        if (hasWhite) s5.append(" W");
+        if (hasBlack) s5.append(" B");
+        if (aiming) s5.append(" !");
         hudLine5 = s5.toString();
     }
 
@@ -883,14 +1287,14 @@ public final class Game extends Canvas {
         box(buf, 0, viewH, w, hudH, C_DARK, C_PURPLE);
         rebuildHud();
         int y = viewH + 4;
-        int col = timeLeftMs < 30000 ? C_RED : C_WHITE;
+        int col = timeLeftMs < SIREN_MS ? C_RED : C_WHITE;
         BitmapFont.drawShadow(buf, w, h, hudLine1, 4, y, col, 1);
         for (int i = 0; i < 5; i++) {
             BitmapFont.drawShadow(buf, w, h, "^", 4 + i * 8, y + 11,
                     i < health ? C_RED : 0xff3a2048, 1);
         }
         BitmapFont.drawShadow(buf, w, h, hudLine2, 46, y + 11, C_YELLOW, 1);
-        BitmapFont.drawShadow(buf, w, h, hudLine3, 4, y + 22, C_GREY, 1);
+        BitmapFont.drawShadow(buf, w, h, hudLine3, 4, y + 22, aiming ? C_YELLOW : C_GREY, 1);
         BitmapFont.drawShadow(buf, w, h, hudLine4, 4, y + 32, C_GREY, 1);
         BitmapFont.drawShadow(buf, w, h, hudLine5, 4, y + 42, C_PURPLE, 1);
     }
@@ -920,15 +1324,19 @@ public final class Game extends Canvas {
         BitmapFont.drawShadow(buf, w, h, message, ((w - bw) >> 1) + 6, 9, messageColor, 1);
     }
 
-    private void drawFlash(int[] buf, long now) {
-        int c = 0xffff3030;
-        for (int y = 0; y < viewH; y += 3) {
-            hline(buf, 0, w - 1, y, 0xff301010);
+    private void drawFlash(int[] buf) {
+        // Короткая вспышка выстрела / укуса: только яркая рамка, без затирания кадра.
+        int c = 0xffa03038;
+        for (int t = 0; t < 3; t++) {
+            hline(buf, t, w - 1 - t, t, c);
+            hline(buf, t, w - 1 - t, viewH - 1 - t, c);
+            vline(buf, t, t, viewH - 1 - t, c);
+            vline(buf, w - 1 - t, t, viewH - 1 - t, c);
         }
-        hline(buf, 0, w - 1, 0, c);
-        hline(buf, 0, w - 1, viewH - 1, c);
-        vline(buf, 0, 0, viewH - 1, c);
-        vline(buf, w - 1, 0, viewH - 1, c);
+        hline(buf, 0, 14, 0, 0xffe05050);
+        hline(buf, w - 15, w - 1, 0, 0xffe05050);
+        hline(buf, 0, 14, viewH - 1, 0xffe05050);
+        hline(buf, w - 15, w - 1, viewH - 1, 0xffe05050);
     }
 
     // --------------------------------------------------------------------- карта
@@ -963,12 +1371,10 @@ public final class Game extends Canvas {
                 }
             }
         }
-        // гермодверь и пропуск видны после чёрного шара
         if (hasBlack) {
             box(buf, ox + level.keyX * cs, oy + level.keyY * cs, cs, cs, C_YELLOW, C_YELLOW);
             box(buf, ox + level.exitX * cs, oy + level.exitY * cs, cs, cs, C_RED, C_RED);
         }
-        // игрок и направление
         int px = ox + playerTX * cs, py = oy + playerTY * cs;
         box(buf, px, py, cs, cs, C_RED, C_WHITE);
         int vx = dirX >> 12, vy = dirY >> 12;
@@ -980,6 +1386,6 @@ public final class Game extends Canvas {
         int sec = (int) (timeLeftMs / 1000);
         center("САМОСБОР " + two(sec / 60) + ":" + two(sec % 60) +
                 (hasKey ? "  ПРОПУСК ЕСТЬ" : "  ПРОПУСКА НЕТ"), h - 30, C_YELLOW, 1);
-        center("* ВЕРНУТЬСЯ   ЭТАП " + (stage + 1) + "/13", h - 16, C_GREY, 1);
+        center("# ВЕРНУТЬСЯ   ЭТАП " + (stage + 1) + "/13", h - 16, C_GREY, 1);
     }
 }

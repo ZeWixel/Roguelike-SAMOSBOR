@@ -1,10 +1,13 @@
 package samosbor;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+
 /**
  * ПРОЦЕДУРНЫЙ ЭТАЖ ГИГАХРУЩЁВКИ.
  * Лабиринт (randomized DFS) + комнаты-«квартиры» + петли + гермодверь,
  * ключ-пропуск, белый/чёрный шары, патроны и твари, собранные из частей тела.
- * Всё детерминировано seed'ом: пароль восстанавливает ровно тот же этаж.
+ * Всё детерминировано seed'ом: снимок RMS восстанавливает ровно тот же этаж.
  */
 public final class Level {
 
@@ -404,5 +407,90 @@ public final class Level {
 
     public void markSeen(int x, int y) {
         if (inside(x, y)) seen[idx(x, y)] = true;
+    }
+
+    /** Прямая видимость по клеткам (Брезенхем) — тварь должна ВИДЕТЬ игрока. */
+    public boolean lineOfSight(int x0, int y0, int x1, int y1) {
+        int dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1;
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy;
+        int x = x0, y = y0;
+        for (int guard = 0; guard < 96; guard++) {
+            if (x == x1 && y == y1) return true;
+            int e2 = err * 2;
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 < dx) { err += dx; y += sy; }
+            if (x == x1 && y == y1) return true;
+            if (isWall(x, y)) return false;
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------- автосохранение
+
+    public void write(DataOutputStream out) throws Exception {
+        out.writeLong(seed);
+        out.writeInt(floorNumber);
+        out.writeInt(stage);
+        out.writeInt(w);
+        out.writeInt(h);
+        out.writeInt(timeLimitSec);
+        out.writeInt(maxDist);
+        out.writeInt(startX); out.writeInt(startY);
+        out.writeInt(exitX); out.writeInt(exitY);
+        out.writeInt(approachX); out.writeInt(approachY);
+        out.writeInt(keyX); out.writeInt(keyY);
+        out.write(tile, 0, tile.length);
+        out.write(floorTex, 0, floorTex.length);
+        out.write(ceilTex, 0, ceilTex.length);
+        byte[] seenBytes = new byte[seen.length];
+        for (int i = 0; i < seen.length; i++) seenBytes[i] = (byte) (seen[i] ? 1 : 0);
+        out.write(seenBytes, 0, seenBytes.length);
+        out.writeInt(itemCount);
+        for (int i = 0; i < itemCount; i++) {
+            out.writeShort(itemType[i]);
+            out.writeShort(itemX[i]);
+            out.writeShort(itemY[i]);
+        }
+        out.writeInt(monsterCount);
+        for (int i = 0; i < monsterCount; i++) monsters[i].write(out);
+    }
+
+    public static Level restore(DataInputStream in) throws Exception {
+        long seed = in.readLong();
+        int floor = in.readInt();
+        int stage = in.readInt();
+        Level lv = new Level(seed, floor, stage);
+        int w = in.readInt(), h = in.readInt();
+        if (w != lv.w || h != lv.h) throw new Exception("save size mismatch");
+        lv.timeLimitSec = in.readInt();
+        lv.maxDist = in.readInt();
+        lv.startX = in.readInt(); lv.startY = in.readInt();
+        lv.exitX = in.readInt(); lv.exitY = in.readInt();
+        lv.approachX = in.readInt(); lv.approachY = in.readInt();
+        lv.keyX = in.readInt(); lv.keyY = in.readInt();
+        in.readFully(lv.tile);
+        in.readFully(lv.floorTex);
+        in.readFully(lv.ceilTex);
+        byte[] seenBytes = new byte[lv.seen.length];
+        in.readFully(seenBytes);
+        for (int i = 0; i < seenBytes.length; i++) lv.seen[i] = seenBytes[i] != 0;
+        lv.itemCount = in.readInt();
+        if (lv.itemCount > lv.itemType.length) {
+            lv.itemType = new int[lv.itemCount];
+            lv.itemX = new int[lv.itemCount];
+            lv.itemY = new int[lv.itemCount];
+        }
+        for (int i = 0; i < lv.itemCount; i++) {
+            lv.itemType[i] = in.readShort();
+            lv.itemX[i] = in.readShort();
+            lv.itemY[i] = in.readShort();
+        }
+        lv.monsterCount = in.readInt();
+        lv.monsters = new Monster[lv.monsterCount];
+        for (int i = 0; i < lv.monsterCount; i++) lv.monsters[i] = Monster.restore(in);
+        lv.computeDist(lv.startX, lv.startY);
+        return lv;
     }
 }

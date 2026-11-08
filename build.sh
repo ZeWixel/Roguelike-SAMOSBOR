@@ -24,6 +24,7 @@ BUILD="$ROOT/build"
 DIST="$ROOT/dist"
 CLDC="$ROOT/tools/cldc11.jar"
 MIDP="$ROOT/tools/midp21.jar"
+MMAPI="$ROOT/tools/jsr135.jar"
 PROGUARD="$ROOT/tools/proguard.jar"
 
 rm -rf "$BUILD/classes" "$BUILD/preverified" "$BUILD/preview" "$BUILD/screenshots"
@@ -33,11 +34,13 @@ echo "==> Текстуры (tools/gen_textures.py)"
 python3 tools/gen_textures.py >/dev/null
 echo "==> Шрифт (tools/gen_font.py)"
 python3 tools/gen_font.py >/dev/null
+echo "==> MIDI-музыка и эффекты (tools/gen_audio.py)"
+python3 tools/gen_audio.py >/dev/null
 
 echo "==> javac -source 1.3 -target 1.3"
 find src -name '*.java' | sort > "$BUILD/sources.txt"
 "$JAVAC" -source 1.3 -target 1.3 -encoding UTF-8 -Xlint:-options \
-    -bootclasspath "$CLDC:$MIDP" -d "$BUILD/classes" @"$BUILD/sources.txt"
+    -bootclasspath "$CLDC:$MIDP:$MMAPI" -d "$BUILD/classes" @"$BUILD/sources.txt"
 
 echo "==> ProGuard -microedition (StackMap для KVM/phoneme)"
 cat > "$BUILD/proguard.cfg" <<EOF
@@ -45,6 +48,7 @@ cat > "$BUILD/proguard.cfg" <<EOF
 -outjars     '$BUILD/preverified'
 -libraryjars '$CLDC'
 -libraryjars '$MIDP'
+-libraryjars '$MMAPI'
 -dontshrink
 -dontoptimize
 -dontobfuscate
@@ -62,8 +66,9 @@ else
 fi
 
 echo "==> Ресурсы"
-mkdir -p "$BUILD/preverified/textures"
+mkdir -p "$BUILD/preverified/textures" "$BUILD/preverified/audio"
 cp res/textures/*.png "$BUILD/preverified/textures/"
+cp res/audio/*.mid "$BUILD/preverified/audio/"
 
 cat > "$BUILD/MANIFEST.MF" <<'EOF'
 Manifest-Version: 1.0
@@ -71,7 +76,7 @@ Created-By: GigaKhrushchyovka build.sh (J2ME)
 MIDlet-1: GigaKhrushchyovka,,samosbor.Main
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.0.0
+MIDlet-Version: 1.1.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
@@ -88,13 +93,13 @@ MIDlet-Jar-Size: $SIZE
 MIDlet-Jar-URL: GigaKhrushchyovka.jar
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.0.0
+MIDlet-Version: 1.1.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
 EOF
 
-echo "==> Превью и самотест (тот же Java-код на MIDP-заглушках)"
+echo "==> Превью и самотест (тот же Java-код на MIDP/MMAPI/RMS-заглушках)"
 "$JAVAC" -source 8 -target 8 -encoding UTF-8 -Xlint:-options \
     -d "$BUILD/preview" \
     $(find tools/preview/stub -name '*.java' | sort) \

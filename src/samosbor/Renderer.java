@@ -252,7 +252,10 @@ public final class Renderer {
                 if (!m.alive) continue;
                 int cx = m.x >> 12, cy = m.y >> 12;
                 if (!lv.inside(cx, cy) || !lv.seen[lv.idx(cx, cy)]) continue;
-                int frame = (int) ((now / 260) & 1);
+                // Поза выпада/отпрыгивания видна заранее — удар телеграфируется.
+                int frame = (m.windupUntil != 0 || m.fleeUntil > now)
+                        ? 1 : (int) ((now / 520) & 1);
+                m.frameIndex = frame;
                 Raster spr = m.frames[frame];
                 drawBillboard(spr, m.x, m.y, 3500, det,
                         posX, posY, dirX, dirY, planeX, planeY, i, horizon);

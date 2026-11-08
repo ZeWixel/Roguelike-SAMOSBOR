@@ -7,17 +7,21 @@ import javax.microedition.midlet.MIDlet;
 public class Main extends MIDlet {
 
     private boolean started;
+    private Game game;
 
     protected void startApp() {
         if (!started) {
             started = true;
-            Display.getDisplay(this).setCurrent(new Game(this));
+            game = new Game(this);
+            Display.getDisplay(this).setCurrent(game);
         }
     }
 
     protected void pauseApp() {
+        if (game != null) game.onPause();
     }
 
     protected void destroyApp(boolean unconditional) {
+        if (game != null) game.onPause();
     }
 }
