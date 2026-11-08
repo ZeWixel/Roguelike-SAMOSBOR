@@ -1,0 +1,40 @@
+777777777773353353533353
+7         73           3
+7 22     773           5
+7  2                   5
+7 22     773           3
+7         73     555 535
+7777 7777773333335     5
+6666 6666 7 7 7 73 3 5 5
+66      67 7 7 775     5
+6               75     3
+6               75 5 5 5
+66      67 7 7 77535 555
+6666 6666773 5737222 222
+1111 1111353  5 52     2
+11     113      32     2
+1       13      32     2
+0       0333335 522   22
+1       111011155  4 4 4
+11     111   11 4 4   44
+1       1     14 4 4 4 4
+0          p           4
+1       1     14 4 4 4 4
+11     111   11 4 4   44
+111101111118111444444444
+map end
+textures begin
+/textures/0.png
+/textures/1.png
+/textures/2.png
+/textures/3.png
+/textures/4.png
+/textures/5.png
+/textures/6.png
+/textures/7.png
+/textures/8.png
+/textures/tiles.png
+/textures/wood.png
+textures end
+default floor texture 9
+default ceiling texture 10

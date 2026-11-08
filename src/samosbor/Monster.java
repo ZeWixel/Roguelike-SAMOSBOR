@@ -1,0 +1,397 @@
+package samosbor;
+
+/**
+ * ПРОЦЕДУРНЫЙ МОНСТР ИЗ РАЗНЫХ ЧАСТЕЙ ТЕЛА.
+ * Как в Insmouse no Yakata, твари не заранее нарисованы: каждая особь
+ * собирается ГПСЧ из головы, торса, рук, ног и «лишней» детали.
+ * Из частей же считаются HP, скорость, урон и имя.
+ */
+public final class Monster {
+
+    public static final String[] HEAD = {
+        "ГОЛОВА", "ПРОТИВОГАЗ", "ГНИЛУШКА", "ГЛАЗ", "ТЕЛЕВИЗОР", "БЕЗ ГОЛОВЫ"
+    };
+    public static final String[] TORSO = {
+        "ТОРС", "БОЧКА", "ПАНЕЛЬ", "КЛЕТЬ", "СРОСТОК", "КОСТЮМ"
+    };
+    public static final String[] ARMS = {
+        "РУКИ", "ТЕНТАКЛИ", "ГРАБЛИ", "ТРУБЫ", "КЛЕШНИ", "БЕЗРУКИЙ"
+    };
+    public static final String[] LEGS = {
+        "НОГИ", "ЛАПЫ", "КОРНИ", "КОЛЁСА", "ОДНОНОГ", "ПАРИТ"
+    };
+    public static final String[] EXTRA = {
+        "ОБЫЧНЫЙ", "СЛИЗЬ", "МНОГОГЛАЗ", "СПИННЫЕ ЩУПАЛЬЦА", "РЖАВЧИНА", "ФИОЛЕТОВЫЙ ОРЕОЛ"
+    };
+    private static final String[] HEAD_SHORT = {
+        "ГОЛОВ", "МАСК", "ГНИЛ", "ГЛАЗ", "ТВ", "БЕЗГОЛОВ"
+    };
+    private static final String[] TORSO_SHORT = {
+        "ТОРС", "БОЧК", "ПАНЕЛ", "КЛЕТ", "СРОСТ", "КОСТЮМ"
+    };
+    private static final String[] ARMS_SHORT = {
+        "РУК", "ТЕНТАКЛ", "ГРАБЛ", "ТРУБ", "КЛЕШН", "БЕЗРУК"
+    };
+    private static final String[] LEGS_SHORT = {
+        "НОГ", "ЛАП", "КОРН", "КОЛЁС", "ОДНОНОГ", "ПАР"
+    };
+
+    // Цветовые схемы: серо-зелёный, самосборный, ржавый, «нелюдь».
+    private static final int[] SKIN = {
+        0xff788c6e, 0xff8b47a0, 0xff96603c, 0xffbeb9a5
+    };
+
+    public int head, torso, arms, legs, extra, palette;
+    public int hp, maxHp, damage, speedMs, sight;
+    public String name;
+
+    public int tileX, tileY;       // текущая клетка
+    public int toX, toY;           // клетка, в которую ползёт
+    public int x, y;               // позиция в fixed point (tile = 4096)
+    public int moveT;              // 0..4096, прогресс перехода
+    public boolean moving, alive;
+    public long nextThink, nextAttack, respawnAt;
+    public Raster[] frames;
+    public int frameIndex;
+
+    private Monster() {}
+
+    /** Создать случайную особь. */
+    public static Monster create(Rng r, int floorIndex) {
+        Monster m = new Monster();
+        m.head = r.nextInt(HEAD.length);
+        m.torso = r.nextInt(TORSO.length);
+        m.arms = r.nextInt(ARMS.length);
+        m.legs = r.nextInt(LEGS.length);
+        m.extra = r.nextInt(EXTRA.length);
+        m.palette = r.nextInt(SKIN.length);
+
+        m.maxHp = 2 + m.torso + m.head / 2 + floorIndex / 4;
+        if (m.maxHp > 10) m.maxHp = 10;
+        m.hp = m.maxHp;
+        m.damage = 1 + m.arms / 2;
+        m.speedMs = 1000 - m.legs * 90 - floorIndex * 8;
+        if (m.legs == 5) m.speedMs -= 180;
+        if (m.speedMs < 280) m.speedMs = 280;
+        m.sight = 7 + m.extra;
+        m.alive = true;
+
+        StringBuffer sb = new StringBuffer();
+        sb.append(HEAD_SHORT[m.head]);
+        sb.append(ARMS_SHORT[m.arms]);
+        sb.append("-");
+        sb.append(TORSO_SHORT[m.torso]);
+        sb.append(LEGS_SHORT[m.legs]);
+        m.name = sb.toString();
+
+        m.frames = new Raster[2];
+        m.frames[0] = build(m, 0);
+        m.frames[1] = build(m, 1);
+        m.frames[0].buildVb();
+        m.frames[1].buildVb();
+        return m;
+    }
+
+    public String description() {
+        return HEAD[head] + " / " + TORSO[torso] + " / " + ARMS[arms] +
+               " / " + LEGS[legs] + " / " + EXTRA[extra];
+    }
+
+    public void place(int tx, int ty) {
+        tileX = toX = tx;
+        tileY = toY = ty;
+        x = tx * 4096 + 2048;
+        y = ty * 4096 + 2048;
+        moveT = 0;
+        moving = false;
+        alive = true;
+        hp = maxHp;
+        nextThink = 0;
+        nextAttack = 0;
+        respawnAt = 0;
+    }
+
+    /** Позиция с интерполяцией между клетками. */
+    public void advance(int dtMs) {
+        if (!moving) return;
+        moveT += (dtMs * 4096) / speedMs;
+        int fx = tileX * 4096 + 2048;
+        int fy = tileY * 4096 + 2048;
+        int txp = toX * 4096 + 2048;
+        int typ = toY * 4096 + 2048;
+        if (moveT >= 4096) {
+            moveT = 4096;
+            x = txp;
+            y = typ;
+            tileX = toX;
+            tileY = toY;
+            moving = false;
+        } else {
+            x = fx + (int) (((long) (txp - fx) * moveT) >> 12);
+            y = fy + (int) (((long) (typ - fy) * moveT) >> 12);
+        }
+    }
+
+    /** Сборка спрайта 40x56 из частей. phase = 0/1 (кадр атаки). */
+    private static Raster build(Monster m, int phase) {
+        Raster g = new Raster(40, 56);
+        int skin = SKIN[m.palette];
+        int dark = Raster.darker(skin, 55);
+        int light = Raster.lighter(skin, 35);
+        int metal = 0xff626570;
+        int steel = 0xff9a9ca0;
+        int purple = 0xffb952c7;
+        int purpleDark = 0xff611c6d;
+        int glow = 0xffe08ae8;
+        int black = 0xff101016;
+        int wob = phase == 0 ? 0 : 3;
+
+        // тень / фиолетовая лужа под тварью
+        g.ellipse(20, 53, 13, 2, 0xff2a1030);
+        if (m.legs == 5) g.ellipse(20, 48, 11, 5, purpleDark);
+
+        drawLegs(g, m.legs, skin, dark, metal, steel, purple, phase, wob);
+        drawExtraBack(g, m.extra, purple, purpleDark, light, phase);
+        drawArms(g, m.arms, skin, dark, metal, steel, purple, glow, phase, wob);
+        drawTorso(g, m.torso, skin, dark, light, metal, steel, purple, black);
+        drawHead(g, m.head, skin, dark, light, metal, steel, purple, glow, black, phase);
+        drawExtraFront(g, m.extra, purple, glow, light, black, phase);
+        return g;
+    }
+
+    private static void drawLegs(Raster g, int kind, int skin, int dark, int metal,
+                                 int steel, int purple, int phase, int wob) {
+        int black = 0xff101016;
+        int lift = phase == 0 ? 0 : 2;
+        switch (kind) {
+            case 0: // НОГИ
+                g.line(16, 38, 15 - lift, 51, dark, 3);
+                g.line(24, 38, 25 + lift, 51, skin, 3);
+                g.rect(11 - lift, 50, 8, 4, black);
+                g.rect(22 + lift, 50, 8, 4, black);
+                break;
+            case 1: // ЛАПЫ
+                g.line(16, 38, 11, 49, skin, 5);
+                g.line(24, 38, 29, 49, skin, 5);
+                for (int i = 0; i < 3; i++) {
+                    g.line(10 + i * 2, 50, 7 + i * 2, 54, steel, 1);
+                    g.line(27 + i * 2, 50, 30 + i * 2, 54, steel, 1);
+                }
+                break;
+            case 2: // КОРНИ
+                for (int i = 0; i < 4; i++) {
+                    int sx = 14 + i * 4;
+                    g.line(sx, 38, sx - 5 + i * 2 + lift, 46, dark, 2);
+                    g.line(sx - 5 + i * 2 + lift, 46, sx - 8 + i * 3, 54, skin, 2);
+                }
+                break;
+            case 3: // КОЛЁСА
+                g.ellipse(13, 48, 6, 6, black);
+                g.ellipse(27, 48, 6, 6, black);
+                g.ring(13, 48, 6, 6, 40, metal);
+                g.ring(27, 48, 6, 6, 40, metal);
+                g.ellipse(13, 48, 2, 2, steel);
+                g.ellipse(27, 48, 2, 2, steel);
+                break;
+            case 4: // ОДНА НОГА
+                g.rect(16, 38, 8, 15, dark);
+                g.rect(17, 38, 6, 15, skin);
+                g.rect(12, 51, 16, 3, metal);
+                break;
+            default: // ПАРИТ
+                g.ellipse(20, 44, 9, 4, purple);
+                g.ellipse(20, 44, 5, 2, 0xffe08ae8);
+                break;
+        }
+    }
+
+    private static void drawExtraBack(Raster g, int kind, int purple, int purpleDark,
+                                      int light, int phase) {
+        if (kind == 3) { // спинные щупальца
+            for (int i = 0; i < 3; i++) {
+                int xx = 8 + i * 12;
+                g.line(xx, 26, xx - 4 + phase * 2, 12, purpleDark, 3);
+                g.line(xx - 4 + phase * 2, 12, xx - 7, 5, purple, 2);
+            }
+        } else if (kind == 5) { // ореол
+            g.ring(20, 15, 15, 15, 75, purple);
+            g.ellipse(20, 1, 2, 2, light);
+        }
+    }
+
+    private static void drawArms(Raster g, int kind, int skin, int dark, int metal,
+                                 int steel, int purple, int glow, int phase, int wob) {
+        int purpleDark = 0xff611c6d;
+        int ly = 36 + wob;
+        int ry = 36 - wob;
+        switch (kind) {
+            case 0: // РУКИ
+                g.line(12, 25, 5, ly, skin, 3);
+                g.line(28, 25, 35, ry, skin, 3);
+                g.ellipse(4, ly + 1, 3, 3, dark);
+                g.ellipse(36, ry + 1, 3, 3, dark);
+                break;
+            case 1: // ТЕНТАКЛИ
+                g.line(12, 25, 2, 30 + wob, purple, 3);
+                g.line(2, 30 + wob, 5, 40 - wob, purpleDark, 3);
+                g.line(5, 40 - wob, 1, 47, purple, 2);
+                g.line(28, 25, 38, 30 - wob, purple, 3);
+                g.line(38, 30 - wob, 35, 40 + wob, purpleDark, 3);
+                g.line(35, 40 + wob, 39, 47, purple, 2);
+                g.ellipse(1, 47, 2, 2, glow);
+                g.ellipse(39, 47, 2, 2, glow);
+                break;
+            case 2: // ГРАБЛИ (оружие ликвидаторов, ставшее частью твари)
+                g.line(12, 25, 4, ly, metal, 3);
+                g.line(28, 25, 36, ry, metal, 3);
+                g.rect(0, ly, 9, 2, steel);
+                g.rect(31, ry, 9, 2, steel);
+                for (int i = 0; i < 4; i++) {
+                    g.line(1 + i * 2, ly + 2, 1 + i * 2, ly + 6, steel, 1);
+                    g.line(32 + i * 2, ry + 2, 32 + i * 2, ry + 6, steel, 1);
+                }
+                break;
+            case 3: // ТРУБЫ
+                g.line(12, 25, 4, ly, metal, 5);
+                g.line(28, 25, 36, ry, metal, 5);
+                g.rect(2, ly - 1, 5, 3, steel);
+                g.rect(33, ry - 1, 5, 3, steel);
+                break;
+            case 4: // КЛЕШНИ
+                g.line(12, 25, 4, 30 + wob, dark, 4);
+                g.line(28, 25, 36, 30 - wob, dark, 4);
+                g.line(4, 30 + wob, 1, 38 + wob, skin, 3);
+                g.line(4, 30 + wob, 8, 38 + wob, skin, 3);
+                g.line(36, 30 - wob, 39, 38 - wob, skin, 3);
+                g.line(36, 30 - wob, 32, 38 - wob, skin, 3);
+                break;
+            default: // БЕЗРУКИЙ
+                g.ellipse(11, 26, 2, 2, dark);
+                g.ellipse(29, 26, 2, 2, dark);
+                break;
+        }
+    }
+
+    private static void drawTorso(Raster g, int kind, int skin, int dark, int light,
+                                  int metal, int steel, int purple, int black) {
+        switch (kind) {
+            case 0: // ТОРС
+                g.rect(12, 21, 16, 19, dark);
+                g.rect(13, 22, 14, 17, skin);
+                g.line(13, 27, 26, 27, dark, 1);
+                g.line(13, 32, 26, 32, dark, 1);
+                break;
+            case 1: // БОЧКА
+                g.ellipse(20, 31, 10, 11, 0xff85532c);
+                g.ellipse(20, 31, 8, 10, 0xff6a3d22);
+                g.rect(10, 26, 20, 2, metal);
+                g.rect(10, 35, 20, 2, metal);
+                break;
+            case 2: // ПАНЕЛЬ
+                g.rect(9, 21, 22, 19, 0xff4a4b50);
+                g.rect(9, 21, 22, 1, steel);
+                g.line(12, 22, 16, 31, 0xff2b2c33, 1);
+                g.line(16, 31, 14, 39, 0xff2b2c33, 1);
+                g.rect(9, 30, 22, 1, 0xff2b2c33);
+                break;
+            case 3: // КЛЕТЬ
+                g.rect(11, 21, 18, 19, black);
+                g.ellipse(20, 31, 7, 8, purple);
+                for (int i = 0; i < 4; i++) g.rect(12 + i * 5, 21, 2, 19, metal);
+                g.rect(11, 21, 18, 2, steel);
+                g.rect(11, 38, 18, 2, steel);
+                break;
+            case 4: // СРОСТОК
+                g.ellipse(15, 27, 7, 8, skin);
+                g.ellipse(25, 29, 8, 7, dark);
+                g.ellipse(20, 35, 9, 6, light);
+                g.ellipse(13, 36, 5, 4, skin);
+                break;
+            default: // КОСТЮМ ликвидатора
+                g.rect(11, 21, 18, 19, 0xff354a38);
+                g.rect(11, 21, 18, 2, metal);
+                g.line(20, 23, 20, 40, steel, 1);
+                g.rect(11, 34, 18, 2, dark);
+                g.ellipse(24, 28, 3, 3, metal);
+                break;
+        }
+    }
+
+    private static void drawHead(Raster g, int kind, int skin, int dark, int light,
+                                 int metal, int steel, int purple, int glow,
+                                 int black, int phase) {
+        switch (kind) {
+            case 0: // ГОЛОВА
+                g.ellipse(20, 12, 8, 9, dark);
+                g.ellipse(20, 12, 7, 8, skin);
+                g.ellipse(16, 11, 2, 2, 0xffe8e0c0);
+                g.ellipse(24, 11, 2, 2, 0xffe8e0c0);
+                g.ellipse(16, 11, 1, 1, black);
+                g.ellipse(24, 11, 1, 1, black);
+                g.rect(17, 17, 6, 1, black);
+                break;
+            case 1: // ПРОТИВОГАЗ
+                g.ellipse(20, 12, 8, 9, dark);
+                g.ellipse(14, 9, 3, 3, steel);
+                g.ellipse(26, 9, 3, 3, steel);
+                g.ellipse(14, 9, 2, 2, 0xff9ad0c0);
+                g.ellipse(26, 9, 2, 2, 0xff9ad0c0);
+                g.ellipse(20, 16, 4, 4, metal);
+                g.ellipse(20, 16, 2, 2, black);
+                g.line(20, 20, 20, 23, metal, 3);
+                break;
+            case 2: // ГНИЛУШКА
+                g.rect(17, 13, 6, 9, light);
+                g.ellipse(20, 10, 11, 7, purple);
+                g.ellipse(20, 9, 10, 5, 0xff8b2c9b);
+                g.ellipse(14, 8, 2, 2, glow);
+                g.ellipse(25, 7, 2, 2, glow);
+                g.ellipse(21, 11, 2, 2, 0xffe08ae8);
+                break;
+            case 3: // ГЛАЗ
+                g.ellipse(20, 12, 11, 9, 0xffe8e0d0);
+                g.ellipse(20, 12, 6, 6, purple);
+                g.ellipse(20, 12, 3, 4, black);
+                g.ellipse(19, 10, 1, 1, glow);
+                g.line(9, 6, 12, 8, skin, 1);
+                g.line(31, 6, 28, 8, skin, 1);
+                break;
+            case 4: // ТЕЛЕВИЗОР
+                g.rect(10, 5, 20, 16, metal);
+                g.rect(12, 7, 16, 12, black);
+                g.rect(14, 9, 12, 8, 0xff4a7a5d);
+                g.line(14, 13, 26, 13, 0xff9ad0c0, 1);
+                g.line(16, 5, 12, 1, steel, 1);
+                g.line(24, 5, 28, 1, steel, 1);
+                break;
+            default: // БЕЗ ГОЛОВЫ
+                g.rect(17, 15, 6, 6, dark);
+                g.rect(18, 15, 4, 2, purple);
+                g.ellipse(20, 21, 3, 2, dark);
+                break;
+        }
+    }
+
+    private static void drawExtraFront(Raster g, int kind, int purple, int glow,
+                                       int light, int black, int phase) {
+        if (kind == 1) { // слизь
+            for (int i = 0; i < 4; i++) {
+                int x = 12 + i * 5;
+                g.line(x, 34, x + (phase == 0 ? 0 : 1), 44 + i, purple, 1);
+                g.ellipse(x + (phase == 0 ? 0 : 1), 45 + i, 1, 1, glow);
+            }
+        } else if (kind == 2) { // лишние глаза
+            g.ellipse(15, 28, 2, 2, glow);
+            g.ellipse(25, 28, 2, 2, glow);
+            g.ellipse(20, 36, 2, 2, glow);
+            g.ellipse(15, 28, 1, 1, black);
+            g.ellipse(25, 28, 1, 1, black);
+        } else if (kind == 4) { // ржавчина
+            for (int i = 0; i < 7; i++) {
+                int x = 11 + (i * 7) % 18;
+                int y = 23 + (i * 11) % 16;
+                g.set(x, y, 0xff85532c);
+            }
+        }
+    }
+}

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Гигахрущёвка: САМОСБОР — J2ME превью</title>
+<style>
+  :root { --bg:#0b0710; --panel:#180e20; --line:#611c6d; --red:#e05050;
+          --purple:#b952c7; --yellow:#d8cf40; --txt:#f0e6d0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font:14px/1.4 "Courier New",monospace; }
+  .wrap { display:flex; gap:20px; flex-wrap:wrap; justify-content:center;
+          padding:18px; max-width:1100px; margin:0 auto; }
+  .left { flex:0 0 480px; max-width:100%; }
+  h1 { color:var(--purple); font-size:22px; margin:0 0 4px; letter-spacing:1px; }
+  .sub { color:var(--red); margin-bottom:12px; font-size:12px; }
+  #screen { width:480px; max-width:100%; height:640px; display:block;
+            border:2px solid var(--line); image-rendering:pixelated;
+            background:#000; box-shadow:0 0 30px #3a1048; }
+  .right { flex:1 1 320px; min-width:280px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          padding:12px; margin-bottom:12px; }
+  .card h2 { font-size:13px; color:var(--yellow); margin:0 0 8px;
+             text-transform:uppercase; letter-spacing:1px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  td { padding:3px 4px; border-bottom:1px solid #2a1836; }
+  td:first-child { color:var(--purple); white-space:nowrap; width:44%; }
+  .key { display:inline-block; border:1px solid var(--purple); padding:0 5px;
+         margin-right:3px; color:var(--yellow); }
+  .pad { display:grid; grid-template-columns:repeat(3,64px);
+         grid-template-rows:repeat(3,46px); gap:5px; justify-content:center;
+         margin-top:8px; }
+  .pad button { background:#261530; color:var(--txt); border:1px solid var(--line);
+                font:16px monospace; cursor:pointer; touch-action:none; }
+  .pad button:active { background:var(--purple); color:#000; }
+  .pad .empty { visibility:hidden; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .row button { flex:1 1 90px; padding:9px 4px; background:#261530;
+                color:var(--yellow); border:1px solid var(--line);
+                font:12px monospace; cursor:pointer; touch-action:none; }
+  .row button:active { background:var(--purple); color:#000; }
+  .note { color:#9a8ca8; font-size:11px; margin-top:10px; }
+  .badge { display:inline-block; background:#2a1836; border:1px solid var(--line);
+           padding:2px 6px; margin:2px; color:var(--purple); font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <h1>ГИГАХРУЩЁВКА: САМОСБОР</h1>
+    <div class="sub">J2ME / MIDP 2.0 · рейкастинг · превью работает на том же Java-коде</div>
+    <canvas id="screen" width="480" height="640"></canvas>
+  </div>
+  <div class="right">
+    <div class="card">
+      <h2>Управление (как Insmouse no Yakata)</h2>
+      <table>
+        <tr><td>Левый D-pad: шаг вперёд</td><td><span class="key">W</span><span class="key">↑</span><span class="key">2</span></td></tr>
+        <tr><td>шаг назад</td><td><span class="key">S</span><span class="key">↓</span><span class="key">8</span></td></tr>
+        <tr><td>поворот на 90°</td><td><span class="key">A</span><span class="key">D</span><span class="key">4</span><span class="key">6</span></td></tr>
+        <tr><td>Правый D-pad: прицел</td><td><span class="key">I</span><span class="key">J</span><span class="key">K</span><span class="key">L</span></td></tr>
+        <tr><td>или диагонали</td><td><span class="key">1</span><span class="key">3</span><span class="key">7</span><span class="key">9</span></td></tr>
+        <tr><td>огонь / перезарядка</td><td><span class="key">Space</span><span class="key">5</span> / <span class="key">R</span><span class="key">0</span></td></tr>
+        <tr><td>карта / очки Virtual Boy</td><td><span class="key">M</span><span class="key">*</span> / <span class="key">V</span><span class="key">#</span></td></tr>
+      </table>
+      <div class="note">1/3/7/9 — «правый D-pad»: 1 ↖, 3 ↗, 7 ↙, 9 ↘.
+        Пары 1+3, 7+9, 1+7, 3+9 дают строго вверх/вниз/влево/вправо.</div>
+      <div class="pad">
+        <button class="empty"></button><button data-k="50">2 ▲</button><button class="empty"></button>
+        <button data-k="52">4 ◄</button><button data-k="53">5</button><button data-k="54">6 ►</button>
+        <button class="empty"></button><button data-k="56">8 ▼</button><button class="empty"></button>
+      </div>
+      <div class="row">
+        <button data-k="55">7 ↙</button><button data-k="49">1 ↖</button>
+        <button data-k="51">3 ↗</button><button data-k="57">9 ↘</button>
+      </div>
+      <div class="row">
+        <button data-k="53">ОГОНЬ</button><button data-k="48">ЗАРЯД</button>
+        <button data-k="42">КАРТА</button><button data-k="35">VB</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Что внутри</h2>
+      <div class="badge">процедурные этажи</div>
+      <div class="badge">твари из частей тела</div>
+      <div class="badge">таймер Самосбора</div>
+      <div class="badge">пропуск + гермодверь</div>
+      <div class="badge">белый/чёрный шар</div>
+      <div class="badge">13 этажей</div>
+      <div class="badge">4 концовки</div>
+      <div class="badge">пароль из 4 знаков</div>
+      <div class="badge">красный режим VB</div>
+      <div class="note">Движок: Mecasting (Роман Лагин) + LLM-J2ME-SUITE.
+        Сборка JAR: <b>./build.sh</b>. В превью играет скомпилированный
+        <b>samosbor.Game</b> на заглушках MIDP, а не JS-порт.</div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d');
+  ctx.imageSmoothingEnabled=false;
+  // Клавиши браузера -> коды J2ME. Массив = комбинация «правого D-pad».
+  const MAP={
+    'w':[50],'ArrowUp':[50],'2':[50],
+    's':[56],'ArrowDown':[56],'8':[56],
+    'a':[52],'ArrowLeft':[52],'4':[52],
+    'd':[54],'ArrowRight':[54],'6':[54],
+    'i':[49,51],'k':[55,57],'j':[49,55],'l':[51,57],
+    '1':[49],'3':[51],'7':[55],'9':[57],
+    ' ':[53],'f':[53],'Enter':[53],'5':[53],
+    'r':[48],'0':[48],
+    'm':[42],'*':[42],'Escape':[42],
+    'v':[35],'#':[35],'h':[51]
+  };
+  const down=new Set();
+  function send(code,state){
+    fetch('/key?k='+code+'&d='+(state?1:0)).catch(()=>{});
+  }
+  function press(codes){ for(const c of codes){ if(!down.has(c)){down.add(c);send(c,1);} } }
+  function release(codes){ for(const c of codes){ if(down.has(c)){down.delete(c);send(c,0);} } }
+  window.addEventListener('keydown',e=>{
+    let k=e.key; if(k.length===1) k=k.toLowerCase();
+    const codes=MAP[k]; if(!codes) return;
+    e.preventDefault(); press(codes);
+  });
+  window.addEventListener('keyup',e=>{
+    let k=e.key; if(k.length===1) k=k.toLowerCase();
+    const codes=MAP[k]; if(!codes) return;
+    e.preventDefault(); release(codes);
+  });
+  window.addEventListener('blur',()=>{ for(const c of Array.from(down)) send(c,0); down.clear(); });
+  document.querySelectorAll('button[data-k]').forEach(b=>{
+    const c=parseInt(b.dataset.k,10);
+    const on=e=>{e.preventDefault(); if(!down.has(c)){down.add(c);send(c,1);}};
+    const off=e=>{e.preventDefault(); if(down.has(c)){down.delete(c);send(c,0);}};
+    b.addEventListener('touchstart',on,{passive:false});
+    b.addEventListener('touchend',off,{passive:false});
+    b.addEventListener('touchcancel',off,{passive:false});
+    b.addEventListener('mousedown',on);
+    b.addEventListener('mouseup',off);
+    b.addEventListener('mouseleave',off);
+  });
+  const img=new Image();
+  img.onload=()=>{ ctx.imageSmoothingEnabled=false;
+                   ctx.drawImage(img,0,0,canvas.width,canvas.height); };
+  function frame(){ img.src='/frame.png?t='+Date.now(); }
+  setInterval(frame,50);
+  frame();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+build/
+tools/preview/classes/
+dist/*.tmp
+*.class
