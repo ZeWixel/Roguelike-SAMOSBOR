@@ -8,6 +8,10 @@ public final class Fx {
     
     public static final int fp = 12, FP = 1<<fp, FPSQR = FP*FP;
 
+    /** Единица угла для плавной камеры: 1/16 градуса (без float). */
+    public static final int SUB = 16;
+    public static final int SUB_FULL = 360 * SUB;
+
     public static int distance(int x, int y, int x2, int y2) {
         return (x2-x)*(x2-x) + (y2-y)*(y2-y);
     }
@@ -33,6 +37,31 @@ public final class Fx {
     
     public static int rotateYVector(int xVec, int yVec, int dir) {
         return (xVec * sin(dir) + yVec * cos(dir)) >> fp;
+    }
+
+    /**
+     * sin/cos для дробного угла (в единицах SUB = 1/16 градуса).
+     * Линейная интерполяция между соседними значениями таблицы даёт плавный
+     * доворот камеры без float, без Math и без аллокаций в кадре.
+     */
+    public static int sinFine(int a) {
+        a %= SUB_FULL;
+        if (a < 0) a += SUB_FULL;
+        int deg = a >> 4;
+        int frac = a & (SUB - 1);
+        int base = sin[deg];
+        int next = sin[deg == 359 ? 0 : deg + 1];
+        return base + ((next - base) * frac / SUB);
+    }
+
+    public static int cosFine(int a) {
+        a %= SUB_FULL;
+        if (a < 0) a += SUB_FULL;
+        int deg = a >> 4;
+        int frac = a & (SUB - 1);
+        int base = cos[deg];
+        int next = cos[deg == 359 ? 0 : deg + 1];
+        return base + ((next - base) * frac / SUB);
     }
     
     public static int arcsin(int y) {

@@ -39,6 +39,10 @@ public final class Game extends Canvas {
     private static final int AUTOSAVE_MS = 12000;
     private static final int DAMAGE_COOLDOWN = 2600;
     private static final int SIREN_MS = 30000;
+    // Плавный доворот: логика по-прежнему шагает ровно на 90°, а камера
+    // доворачивается за TURN_MS с ease-in-out (smoothstep) и дробным углом.
+    private static final int TURN_MS = 230;
+    private static final int TURN_QUARTER = 90 * Fx.SUB;
 
     private static final int C_WHITE = 0xfff0e6d0, C_RED = 0xffe05050,
             C_PURPLE = 0xffb952c7, C_YELLOW = 0xffd8cf40,
@@ -111,7 +115,12 @@ public final class Game extends Canvas {
 
     private Level level;
     private long timeLeftMs;
-    private int playerTX, playerTY, posX, posY, dirDeg, dirX, dirY, planeX, planeY;
+    // dirDeg/dirX/dirY — ЛОГИЧЕСКОЕ направление (шаг/карта/сейв), 90° точно.
+    private int playerTX, playerTY, posX, posY, dirDeg, dirX, dirY;
+    // cam* — ВИЗУАЛЬНАЯ камера: дробный угол и интерполированные векторы.
+    private int camAngle, camFrom, camTarget, camDirX, camDirY,
+            camPlaneX, camPlaneY;
+    private long turnStart, turnEnd;
     private int aimX, aimY;
     private int health, magazine, reserve;
     private boolean hasKey, hasWhite, hasBlack;
@@ -349,7 +358,10 @@ public final class Game extends Canvas {
                 } else if (a == A_UP || a == A_DOWN || a == A_LEFT || a == A_RIGHT) {
                     if (!aiming) {
                         navigate(a, now);
-                        nextNav = now + 230;
+                        // Поворот длится TURN_MS: удержание даёт непрерывное
+                        // вращение без рывков и без накопления отставания.
+                        boolean turn = (a == A_LEFT || a == A_RIGHT);
+                        nextNav = now + (turn ? TURN_MS : 230);
                     }
                 }
                 break;
@@ -503,6 +515,7 @@ public final class Game extends Canvas {
         if (dt < 0) dt = 0;
         if (dt > 200) dt = 200;
         lastFrame = now;
+        advanceCamera(now);          // плавный доворот идёт даже вне update()
         if (state == PLAY) update(dt, now);
         renderFrame(now);
         g.drawRGB(renderer.screen, 0, w, 0, 0, w, h, false);
@@ -539,7 +552,8 @@ public final class Game extends Canvas {
             else if (held[A_RIGHT]) a = A_RIGHT;
             if (a >= 0) {
                 navigate(a, now);
-                nextNav = now + 190;
+                boolean turn = (a == A_LEFT || a == A_RIGHT);
+                nextNav = now + (turn ? TURN_MS : 190);
             }
         }
 
@@ -758,8 +772,8 @@ public final class Game extends Canvas {
 
     private void navigate(int a, long now) {
         if (showMap) return;
-        if (a == A_LEFT) { rotate(-90); return; }
-        if (a == A_RIGHT) { rotate(90); return; }
+        if (a == A_LEFT) { rotate(-90, now); return; }
+        if (a == A_RIGHT) { rotate(90, now); return; }
         int sign = (a == A_UP) ? 1 : -1;
         int tx = playerTX + (dirX * sign >> 12);
         int ty = playerTY + (dirY * sign >> 12);
@@ -1046,16 +1060,67 @@ public final class Game extends Canvas {
         checkpoint();
     }
 
-    private void rotate(int delta) {
+    /**
+     * Логический поворот на 90° выполняется мгновенно (шаг вперёд, карта и
+     * RMS-сейв видят новое направление сразу), а камера начинает плавный
+     * доворот из текущего промежуточного положения. Очередь поворотов при
+     * удержании клавиши не теряется: цель просто накапливается.
+     */
+    private void rotate(int delta, long now) {
+        advanceCamera(now);
         dirDeg = Fx.fixDegree(dirDeg + delta);
-        setVectors();
+        dirX = Fx.rotateXVector(-FP, 0, dirDeg);
+        dirY = Fx.rotateYVector(-FP, 0, dirDeg);
+        camFrom = camAngle;
+        camTarget += (delta > 0 ? TURN_QUARTER : -TURN_QUARTER);
+        turnStart = now;
+        turnEnd = now + TURN_MS;
     }
 
+    /** Старт этажа / восстановление сейва: камера уже смотрит куда надо. */
     private void setVectors() {
         dirX = Fx.rotateXVector(-FP, 0, dirDeg);
         dirY = Fx.rotateYVector(-FP, 0, dirDeg);
-        planeX = Fx.rotateXVector(0, planeLen, dirDeg);
-        planeY = Fx.rotateYVector(0, planeLen, dirDeg);
+        snapCamera();
+    }
+
+    private void snapCamera() {
+        camTarget = Fx.fixDegree(dirDeg) * Fx.SUB;
+        camAngle = camFrom = camTarget;
+        turnStart = turnEnd = 0;
+        updateCameraVectors();
+    }
+
+    /**
+     * Плавный доворот камеры: smoothstep за TURN_MS. Только целочисленная
+     * арифметика — совместимо с CLDC 1.1 / java 1.3.
+     */
+    private void advanceCamera(long now) {
+        if (turnEnd > turnStart) {
+            int t = (int) ((now - turnStart) * 256 / (turnEnd - turnStart));
+            if (t < 0) t = 0;
+            else if (t > 256) t = 256;
+            int e = (t * t * (768 - 2 * t)) / 65536;   // 0..256, ease-in-out
+            camAngle = camFrom + ((camTarget - camFrom) * e >> 8);
+            if (t >= 256) {
+                camAngle = camTarget;
+                turnEnd = turnStart;
+            }
+        } else {
+            camAngle = camTarget;
+        }
+        updateCameraVectors();
+    }
+
+    /** Векторы для рейкастера из дробного угла; логика их не использует. */
+    private void updateCameraVectors() {
+        int a = camAngle % Fx.SUB_FULL;
+        if (a < 0) a += Fx.SUB_FULL;
+        int s = Fx.sinFine(a), c = Fx.cosFine(a);
+        camDirX = -c;
+        camDirY = -s;
+        camPlaneX = (-planeLen * s) >> 12;
+        camPlaneY = (planeLen * c) >> 12;
     }
 
     private void setMessage(String s, int color) {
@@ -1207,7 +1272,7 @@ public final class Game extends Canvas {
             case BRIEF: drawBrief(buf); break;
             case PROGRESS: drawProgress(buf, now); break;
             case PLAY:
-                renderer.render(level, posX, posY, dirX, dirY, planeX, planeY, now);
+                renderer.render(level, posX, posY, camDirX, camDirY, camPlaneX, camPlaneY, now);
                 if (aiming) drawWeapon(buf, now);
                 drawHud(buf, now);
                 if (aiming) drawCrosshair(buf);
@@ -1220,7 +1285,7 @@ public final class Game extends Canvas {
                 drawEnding(buf, now);
                 break;
             case PAUSE:
-                renderer.render(level, posX, posY, dirX, dirY, planeX, planeY, now);
+                renderer.render(level, posX, posY, camDirX, camDirY, camPlaneX, camPlaneY, now);
                 if (aiming) drawWeapon(buf, now);
                 drawHud(buf, now);
                 drawPause(buf, now);
@@ -1424,7 +1489,7 @@ public final class Game extends Canvas {
             "ЛЕВЫЙ РЕЖИМ (ХОДЬБА)",
             "2 ВПЕРЁД  8 НАЗАД",
             "4 ПОВОРОТ 90  6 ПОВОРОТ 90",
-            "",
+            "КАМЕРА ДОВОРАЧИВАЕТ ПЛАВНО",
             "7 ДОСТАТЬ ОРУЖИЕ",
             "В РЕЖИМЕ ПРИЦЕЛА:",
             "2/4/6/8 ДВИГАЮТ ПРИЦЕЛ",

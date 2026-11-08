@@ -13,6 +13,7 @@ import java.lang.reflect.Method;
  *  - новый ИИ: телеграфированный укус, 1 сердце, толчок не ранит;
  *  - клаустрофобные коридоры: доля узких клеток и отсутствие больших залов;
  *  - карта продвижения: 45 узлов ROM, 13 колонок, 4 концовки, переходы;
+ *  - плавный доворот камеры: дробные sin/cos, ease-in-out, логика ровно 90°;
  *  - полный пробег: 13 этажей от старта до концовки A.
  */
 public final class SelfTest {
@@ -28,6 +29,7 @@ public final class SelfTest {
         testRomMechanics();
         testCorridors();
         testProgressChart();
+        testSmoothTurn();
         testFullRun();
         System.out.println("SelfTest: " + checks + " checks, " + failures + " failures");
         if (failures > 0) System.exit(1);
@@ -547,6 +549,60 @@ public final class SelfTest {
         check(fState.getInt(g) == 7, "right soft key returns to chart");
         Save.clear();
         System.out.println("  progress chart: ok");
+    }
+
+    /** Плавный доворот: логика мгновенна, камера интерполируется по времени. */
+    private static void testSmoothTurn() throws Exception {
+        check(Fx.SUB == 16, "fine angle is 1/16 degree");
+        check(Fx.sinFine(0) == 0, "sinFine(0)");
+        check(Fx.cosFine(0) == 4096, "cosFine(0)");
+        check(Fx.sinFine(90 * Fx.SUB) == 4096, "sinFine(90)");
+        check(Fx.cosFine(90 * Fx.SUB) == 0, "cosFine(90)");
+        int s45 = Fx.sinFine(45 * Fx.SUB + 8);
+        int c45 = Fx.cosFine(45 * Fx.SUB + 8);
+        check(s45 > Fx.sin(45) && s45 < Fx.sin(46),
+                "sinFine interpolates inside a degree (" + s45 + ")");
+        check(c45 < Fx.cos(45) && c45 > Fx.cos(46),
+                "cosFine interpolates inside a degree (" + c45 + ")");
+        check(Fx.sinFine(-90 * Fx.SUB) == -4096, "sinFine handles negative angles");
+
+        BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
+        Graphics gfx = new Graphics(img);
+        Game g = new Game(null);
+        Field fDir = field(Game.class, "dirDeg");
+        Field fCam = field(Game.class, "camAngle");
+        Field fCamDirX = field(Game.class, "camDirX");
+        Field fDirX = field(Game.class, "dirX");
+        Field fTurnStart = field(Game.class, "turnStart");
+        tap(g, 53); tap(g, 53);                  // НОВЫЙ ЗАБЕГ -> PLAY
+        int startDeg = fDir.getInt(g);
+        check(fCam.getInt(g) == startDeg * Fx.SUB,
+                "camera aligned with heading at level start");
+        check(fCamDirX.getInt(g) == fDirX.getInt(g),
+                "idle camera vectors equal logical vectors");
+
+        tap(g, 54);                              // 6 = поворот вправо на 90
+        check(fDir.getInt(g) == Fx.fixDegree(startDeg + 90),
+                "logical heading still turns instantly by 90");
+        Method adv = method(Game.class, "advanceCamera", new Class[] {long.class});
+        long t0 = fTurnStart.getLong(g);
+        int target = startDeg * Fx.SUB + 90 * Fx.SUB;
+        adv.invoke(g, new Object[] {new Long(t0 + 57)});
+        int mid = fCam.getInt(g);
+        check(mid > startDeg * Fx.SUB && mid < target,
+                "camera is between headings mid-turn (" + mid + ")");
+        check(fCamDirX.getInt(g) != fDirX.getInt(g),
+                "raycaster uses the interpolated direction");
+        adv.invoke(g, new Object[] {new Long(t0 + 231)});
+        check(fCam.getInt(g) == target,
+                "camera settles exactly on the new heading");
+        check(fCamDirX.getInt(g) == fDirX.getInt(g),
+                "camera vectors realign with logic after the turn");
+        tap(g, 52);                              // обратный поворот
+        g.paint(gfx);
+        g.paint(gfx);
+        check(fDir.getInt(g) == startDeg, "second turn restores heading");
+        System.out.println("  smooth turn: ok");
     }
 
     private static void testFullRun() throws Exception {
