@@ -151,6 +151,14 @@ public final class Preview {
             }
         }
         Game g = game;
+        // 99 = отладочный показ карты продвижения (только в превью).
+        if (code == 99 && down) {
+            synchronized (g) {
+                try { forceProgress(g); } catch (Exception e) { e.printStackTrace(); }
+            }
+            send(ex, "text/plain", "ok".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
         synchronized (g) { g.injectKey(code, down); }
         send(ex, "text/plain", "ok".getBytes(StandardCharsets.UTF_8));
     }
@@ -200,8 +208,26 @@ public final class Preview {
 
         tap(g, -7); g.paint(g2);                          // правая софт = пауза
         save(img, new File(d, "11-pause.png"));
+        tap(g, -7);                                       // снять паузу
+
+        forceProgress(g);
+        g.paint(g2);
+        save(img, new File(d, "12-progress.png"));         // карта продвижения
         Save.clear();
         System.out.println("capture done -> " + dir);
+    }
+
+    /** Для кадра/превью: показать дерево этажей на середине забега. */
+    private static void forceProgress(Game g) throws Exception {
+        Field fState = field(Game.class, "state");
+        field(Game.class, "stage").setInt(g, 5);
+        field(Game.class, "floorNumber").setInt(g, 560);
+        field(Game.class, "fastFloors").setInt(g, 3);
+        int[] row = (int[]) field(Game.class, "routeRow").get(g);
+        int[] demo = {0, 0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2};
+        for (int i = 0; i < row.length; i++) row[i] = demo[i];
+        field(Game.class, "routeFast").setBoolean(g, true);
+        fState.setInt(g, 7);
     }
 
     /** Для кадра: ставим тварь за CRACKED-стеной и заставляем её пробить её. */

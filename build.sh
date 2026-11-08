@@ -76,7 +76,7 @@ Created-By: GigaKhrushchyovka build.sh (J2ME)
 MIDlet-1: GigaKhrushchyovka,,samosbor.Main
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.1.0
+MIDlet-Version: 1.2.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
@@ -93,7 +93,7 @@ MIDlet-Jar-Size: $SIZE
 MIDlet-Jar-URL: GigaKhrushchyovka.jar
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.1.0
+MIDlet-Version: 1.2.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0

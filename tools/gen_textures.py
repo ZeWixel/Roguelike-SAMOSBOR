@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Генератор текстур для «Гигахрущёвки».
-Пишет 64x64 индексированные PNG (color type 3, 8 bit) — самый совместимый
-с MIDP 2.0 / CLDC формат Image.createImage().
+Генератор фотореалистичных текстур для «Гигахрущёвки».
+
+Настоящие фото-поверхности (tools/photo_src/base_*.png, см. README там же)
+смешиваются с процедурной разметкой (двери, швы, заклёпки, трещины), затем
+квантуются в 256-цветную палитру с дизерингом Флойда-Стейнберга.
+Результат — 64x64 индексированные PNG (color type 3, 8 bit, PLTE на 256
+цветов): самый совместимый с MIDP 2.0 / CLDC формат Image.createImage(),
+при этом с фотографической фактурой бетона, кафеля, ржавчины и слизи.
 
 Запуск: python3 tools/gen_textures.py
 """
@@ -14,7 +19,109 @@ import zlib
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    'res', 'textures')
+PHOTO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'photo_src')
 SIZE = 64
+
+# Фотореалистичная основа: (файл в photo_src, доля фото в пикселе, цветовой сдвиг).
+# Доля < 1 намеренно: процедурная разметка (рамки дверей, швы плитки,
+# заклёпки, трещины, плакаты) должна читаться поверх настоящей поверхности.
+PHOTO_BASE = {
+    'beton.png':      ('concrete', 0.72, (1.00, 1.00, 1.02)),
+    'kraska.png':     ('concrete', 0.70, (1.04, 0.99, 0.93)),
+    'plitka.png':     ('tile',     0.72, (0.98, 1.00, 1.02)),
+    'germodver.png':  ('metal',    0.56, (0.93, 1.02, 0.97)),
+    'dver.png':       ('metal',    0.56, (1.02, 0.96, 0.87)),
+    'okno.png':       ('tile',     0.58, (0.87, 0.95, 1.07)),
+    'poster.png':     ('concrete', 0.55, (1.08, 0.94, 0.80)),
+    'truby.png':      ('metal',    0.60, (0.96, 0.98, 1.03)),
+    'treshchina.png': ('cracked',  0.66, (1.00, 1.00, 1.00)),
+    'lift.png':       ('metal',    0.58, (0.94, 0.97, 1.05)),
+    'pol.png':        ('concrete', 0.72, (0.72, 0.74, 0.79)),
+    'potolok.png':    ('concrete', 0.70, (0.62, 0.63, 0.69)),
+    'sliz.png':       ('slime',    0.72, (1.00, 0.98, 1.05)),
+    'reshetka.png':   ('metal',    0.60, (0.90, 0.93, 0.97)),
+    'klet.png':       ('slime',    0.60, (1.05, 0.90, 1.07)),
+    'kirpich.png':    ('concrete', 0.68, (1.10, 0.92, 0.78)),
+}
+
+
+def read_rgb_png(path):
+    """Минимальный декодер 8-бит RGB/RGBA PNG (все PNG-фильтры)."""
+    d = open(path, 'rb').read()
+    assert d[:8] == b'\x89PNG\r\n\x1a\n', path
+    pos, idat, w, h, ct = 8, bytearray(), 0, 0, 0
+    while pos + 8 <= len(d):
+        ln = struct.unpack('>I', d[pos:pos + 4])[0]
+        typ = d[pos + 4:pos + 8]
+        chunk = d[pos + 8:pos + 8 + ln]
+        pos += 12 + ln
+        if typ == b'IHDR':
+            w, h, _bd, ct = struct.unpack('>IIBB', chunk[:10])
+        elif typ == b'IDAT':
+            idat += chunk
+        elif typ == b'IEND':
+            break
+    bpp = 3 if ct == 2 else 4
+    raw = zlib.decompress(bytes(idat))
+    stride = w * bpp
+    prev = bytearray(stride)
+    out = []
+    p = 0
+    for _ in range(h):
+        ft = raw[p]; p += 1
+        line = bytearray(raw[p:p + stride]); p += stride
+        if ft == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif ft == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif ft == 3:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+        elif ft == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pp = a + b - c
+                pa, pb, pc = abs(pp - a), abs(pp - b), abs(pp - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 255
+        for i in range(w):
+            o = i * bpp
+            out.append((line[o], line[o + 1], line[o + 2]))
+        prev = line
+    return w, h, out
+
+
+# 256-цветная палитра: куб 6x6x6 + 40 уровней серого. Индексированный PNG
+# (color type 3) остаётся самым совместимым с MIDP Image.createImage().
+PHOTO_PAL = []
+for _r in range(6):
+    for _g in range(6):
+        for _b in range(6):
+            PHOTO_PAL.append((_r * 51, _g * 51, _b * 51))
+for _k in range(40):
+    _v = _k * 255 // 39
+    PHOTO_PAL.append((_v, _v, _v))
+_NEAR_CACHE = {}
+
+
+def nearest(rgb):
+    key = (int(rgb[0]) >> 2, int(rgb[1]) >> 2, int(rgb[2]) >> 2)
+    hit = _NEAR_CACHE.get(key)
+    if hit is not None:
+        return hit
+    best, bi = 1 << 30, 0
+    for i, (pr, pg, pb) in enumerate(PHOTO_PAL):
+        d = (rgb[0] - pr) ** 2 + (rgb[1] - pg) ** 2 + (rgb[2] - pb) ** 2
+        if d < best:
+            best, bi = d, i
+    _NEAR_CACHE[key] = bi
+    return bi
 
 # 64-цветная палитра: бетон, краска, ржавчина, металл, фиолет Самосбора.
 PAL = [
@@ -384,11 +491,61 @@ def tex_kirpich():
     return c
 
 
-def write_png(path, c):
+def write_png(path, c, name):
+    """Фото-основа + процедурная разметка -> 256-цветный индексированный PNG.
+
+    Floyd-Steinberg убирает бандинг после квантования; PLTE из 256 цветов
+    читается и MIDP Image.createImage(), и desktop-заглушкой ImageIO.
+    """
+    spec = PHOTO_BASE.get(name)
+    photo = None
+    if spec is not None:
+        src = os.path.join(PHOTO_DIR, 'base_' + spec[0] + '.png')
+        if os.path.exists(src):
+            pw, ph, photo = read_rgb_png(src)
+    weight = spec[1] if spec else 0.0
+    tint = spec[2] if spec else (1.0, 1.0, 1.0)
+
+    fbuf = []
+    for i in range(SIZE * SIZE):
+        pr, pg, pb = PAL[c.p[i]]
+        if photo is not None:
+            br, bg, bb = photo[i]
+            br *= tint[0]; bg *= tint[1]; bb *= tint[2]
+            r = br * weight + pr * (1 - weight)
+            g = bg * weight + pg * (1 - weight)
+            b = bb * weight + pb * (1 - weight)
+        else:
+            r, g, b = pr, pg, pb
+        # лёгкий контраст: фото выглядит «материей», а не плоской заливкой
+        fbuf.append([(v - 128) * 1.14 + 128 + 12 for v in (r, g, b)])
+
+    idx = bytearray(SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            i = y * SIZE + x
+            r, g, b = fbuf[i]
+            ci = nearest((r, g, b))
+            idx[i] = ci
+            pr, pg, pb = PHOTO_PAL[ci]
+            er, eg, eb = r - pr, g - pg, b - pb
+            if x + 1 < SIZE:
+                t = fbuf[i + 1]
+                t[0] += er * 7 / 16.; t[1] += eg * 7 / 16.; t[2] += eb * 7 / 16.
+            if y + 1 < SIZE:
+                if x > 0:
+                    t = fbuf[i + SIZE - 1]
+                    t[0] += er * 3 / 16.; t[1] += eg * 3 / 16.; t[2] += eb * 3 / 16.
+                t = fbuf[i + SIZE]
+                t[0] += er * 5 / 16.; t[1] += eg * 5 / 16.; t[2] += eb * 5 / 16.
+                if x + 1 < SIZE:
+                    t = fbuf[i + SIZE + 1]
+                    t[0] += er / 16.; t[1] += eg / 16.; t[2] += eb / 16.
+
     raw = bytearray()
     for y in range(SIZE):
         raw.append(0)  # filter: none
-        raw.extend(c.p[y * SIZE:(y + 1) * SIZE])
+        raw.extend(idx[y * SIZE:(y + 1) * SIZE])
 
     def chunk(t, data):
         return (struct.pack('>I', len(data)) + t + data +
@@ -396,7 +553,7 @@ def write_png(path, c):
 
     ihdr = struct.pack('>IIBBBBB', SIZE, SIZE, 8, 3, 0, 0, 0)
     plte = bytearray()
-    for r, g, b in PAL[:64]:
+    for r, g, b in PHOTO_PAL:
         plte += bytes((r, g, b))
     png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) +
            chunk(b'PLTE', bytes(plte)) +
@@ -420,6 +577,6 @@ TEXTURES = [
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
     for name, fn in TEXTURES:
-        write_png(os.path.join(OUT, name), fn())
+        write_png(os.path.join(OUT, name), fn(), name)
         print('  res/textures/' + name)
     print('done:', len(TEXTURES), 'textures')

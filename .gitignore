@@ -2,3 +2,7 @@ build/
 tools/preview/classes/
 dist/*.tmp
 *.class
+
+# Python bytecode from generators
+__pycache__/
+*.pyc

@@ -69,6 +69,7 @@
         <tr><td>огонь / перезарядка</td><td><span class="key">5</span><span class="key">Space</span> / <span class="key">0</span><span class="key">R</span></td></tr>
         <tr><td>очки Virtual Boy / карта</td><td><span class="key">*</span><span class="key">V</span> / <span class="key">#</span><span class="key">M</span></td></tr>
         <tr><td><b>меню паузы (прав. софт)</b></td><td><span class="key">P</span><span class="key">F2</span> / кнопка ниже</td></tr>
+        <tr><td>карта продвижения (превью)</td><td><span class="key">N</span> / кнопка ниже</td></tr>
       </table>
       <div class="note">Без оружия 2/8 — шаг на клетку, 4/6 — поворот на 90°.
         С оружием те же кнопки двигают прицел, 5 стреляет. В меню 2/8
@@ -88,6 +89,7 @@
       </div>
       <div class="row">
         <button class="hot" data-k="-7">ПРАВ. СОФТ — ПАУЗА</button>
+        <button data-k="99">КАРТА ПУТИ</button>
       </div>
       <button id="snd">▶ ВКЛЮЧИТЬ ЗВУК (WebAudio-эффекты)</button>
     </div>
@@ -126,6 +128,7 @@
     'v':[42],'*':[42],
     'm':[35],'#':[35],'Escape':[35],
     'p':[-7],'F2':[-7],
+    'n':[99],
     '1':[49],'3':[51],'9':[57]
   };
   const down=new Set();

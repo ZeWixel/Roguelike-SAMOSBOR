@@ -5,8 +5,9 @@ import java.io.DataOutputStream;
 
 /**
  * ПРОЦЕДУРНЫЙ ЭТАЖ ГИГАХРУЩЁВКИ.
- * Лабиринт (randomized DFS) + комнаты-«квартиры» + петли + гермодверь,
- * ключ-пропуск, белый/чёрный шары, патроны и твари, собранные из частей тела.
+ * Узкие коридоры (randomized DFS) + редкие 2x2..3x3 «квартиры» + минимум
+ * петель + гермодверь, ключ-пропуск, белый/чёрный шары, патроны и твари,
+ * собранные из частей тела. Клаустрофобная планировка Insmouse no Yakata.
  * Всё детерминировано seed'ом: снимок RMS восстанавливает ровно тот же этаж.
  */
 public final class Level {
@@ -150,10 +151,13 @@ public final class Level {
     }
 
     private void carveRooms() {
-        int rooms = 3 + rng.nextInt(4);
+        // Insmouse no Yakata — это в первую очередь тесные коридоры шириной
+        // в одну клетку. Больших залов нет: изредка маленькая «квартира»
+        // 2x2..3x3, где можно разминуться с тварью и перевести дух.
+        int rooms = rng.chance(60) ? 1 : 2;
         for (int r = 0; r < rooms; r++) {
-            int rw = 3 + rng.nextInt(4);
-            int rh = 3 + rng.nextInt(4);
+            int rw = 2 + rng.nextInt(2);
+            int rh = 2 + rng.nextInt(2);
             int x0 = 2 + rng.nextInt(w - rw - 4);
             int y0 = 2 + rng.nextInt(h - rh - 4);
             for (int y = y0; y < y0 + rh; y++) {
@@ -163,12 +167,15 @@ public final class Level {
     }
 
     private void carveLoops() {
+        // Мало петель => много тупиков, длинные извилистые проходы и ощущение,
+        // что стены подступают со всех сторон. Связность гарантирует
+        // connectAll() + computeDist() (проверяется в SelfTest на 60 этажах).
         for (int y = 2; y < h - 2; y++) {
             for (int x = 2; x < w - 2; x++) {
                 if (tile[idx(x, y)] != WALL) continue;
                 boolean horizontal = tile[idx(x - 1, y)] == FLOOR && tile[idx(x + 1, y)] == FLOOR;
                 boolean vertical = tile[idx(x, y - 1)] == FLOOR && tile[idx(x, y + 1)] == FLOOR;
-                if ((horizontal || vertical) && rng.chance(22)) tile[idx(x, y)] = FLOOR;
+                if ((horizontal || vertical) && rng.chance(7)) tile[idx(x, y)] = FLOOR;
             }
         }
     }
@@ -188,18 +195,18 @@ public final class Level {
                 }
                 int roll = rng.nextInt(100);
                 byte t;
-                if (roll < 34) t = WALL;
-                else if (roll < 49) t = PAINT;
-                else if (roll < 58) t = TILEWALL;
-                else if (roll < 68) t = APART;
-                else if (roll < 75) t = WINDOW;
-                else if (roll < 80) t = POSTER;
-                else if (roll < 85) t = PIPES;
+                if (roll < 38) t = WALL;       // глухой бетон доминирует
+                else if (roll < 51) t = PAINT;
+                else if (roll < 59) t = TILEWALL;
+                else if (roll < 73) t = APART; // двери квартир по обе стороны коридора
+                else if (roll < 78) t = WINDOW;
+                else if (roll < 82) t = POSTER;
+                else if (roll < 86) t = PIPES;
                 else if (roll < 89) t = GRATE;
-                else if (roll < 93) t = BRICK;
-                else if (roll < 94) t = KLET;
-                else if (roll < 95) t = LIFT;
-                else t = CRACKED; // ~5%: «B» в картах ROM — стены, что ломают твари
+                else if (roll < 92) t = BRICK;
+                else if (roll < 93) t = KLET;
+                else if (roll < 94) t = LIFT;
+                else t = CRACKED; // ~6%: «B» в картах ROM — стены, что ломают твари
                 tile[i] = t;
             }
         }

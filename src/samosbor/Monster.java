@@ -44,6 +44,86 @@ public final class Monster {
         0xff788c6e, 0xff8b47a0, 0xff96603c, 0xffbeb9a5
     };
 
+    // Фотореализм спрайтов: макро-снимки кожи (skin0..3) дают поры, вены и
+    // слизь, а изолированное фото твари (beast0..3, четыре цветовые морфы)
+    // задаёт настоящую фотографическую анатомию поверх ГПСЧ-силуэта.
+    private static Texture[] skinTex, beastTex;
+    private static boolean photoReady;
+
+    private static void ensurePhotos() {
+        if (photoReady) return;
+        photoReady = true;
+        skinTex = new Texture[4];
+        beastTex = new Texture[4];
+        for (int i = 0; i < 4; i++) {
+            skinTex[i] = Texture.load("/textures/skin" + i + ".png");
+            beastTex[i] = Texture.load("/textures/beast" + i + ".png");
+        }
+    }
+
+    /** Собирает фото-пиксель с лёгким подъёмом яркости для тёмного коридора. */
+    private static int photoColor(int c, int shift) {
+        int r = ((c >> 16) & 255) * 5 / 4 + shift;
+        int g = ((c >> 8) & 255) * 5 / 4 + shift;
+        int b = (c & 255) * 5 / 4 + shift;
+        return 0xff000000 |
+                ((r < 0 ? 0 : r > 255 ? 255 : r) << 16) |
+                ((g < 0 ? 0 : g > 255 ? 255 : g) << 8) |
+                (b < 0 ? 0 : b > 255 ? 255 : b);
+    }
+
+    /**
+     * ГПСЧ-спрайт остаётся «скелетом» (голова/руки/ноги/лишняя деталь задают
+     * форму и окраску), а поверх него ложится настоящая фотография:
+     *  - где фото-тварь светлее фона — берём её пиксели на 78%, сохраняя 22%
+     *    процедурного цвета, чтобы части тела всё ещё различались;
+     *  - где фото чёрное — оставляем процедурные примитивы, но модулируем их
+     *    макро-текстурой кожи (поры, вены, влажные блики);
+     *  - свечение глаз не трогаем: тварь читается и в Virtual Boy.
+     */
+    private static void applyPhotoSkin(Raster g, int palette) {
+        ensurePhotos();
+        int p = palette < 0 || palette > 3 ? 0 : palette;
+        Texture s = skinTex[p], b = beastTex[p];
+        if (s.w < 1 || s.h < 1 || b.w < 1 || b.h < 1) return;
+        for (int i = 0; i < g.p.length; i++) {
+            int c = g.p[i];
+            int x = i % g.w, y = i / g.w;
+            int bc = b.rgb[(y % b.h) * b.w + (x % b.w)];
+            int br = (bc >> 16) & 255, bg = (bc >> 8) & 255, bb = bc & 255;
+            int blum = (br * 77 + bg * 150 + bb * 29) >> 8;
+            boolean body = blum > 26;
+            if ((c >>> 24) == 0) {
+                // фотография может чуть расширить силуэт (щупальца, пальцы)
+                g.p[i] = body ? photoColor(bc, 10) : 0;
+                continue;
+            }
+            int cr = (c >> 16) & 255, cg = (c >> 8) & 255, cb = c & 255;
+            if (cr > 205 && cg > 195 && cb > 190) continue;  // глаза/свечение
+            int sc = s.rgb[(y % s.h) * s.w + (x % s.w)];
+            int sr = (sc >> 16) & 255, sg = (sc >> 8) & 255, sb = sc & 255;
+            int slum = (sr * 77 + sg * 150 + sb * 29) >> 8;
+            int r, gg, b2;
+            if (body) {
+                int pc = photoColor(bc, 8);
+                int pr = (pc >> 16) & 255, pg = (pc >> 8) & 255, pb = pc & 255;
+                r = (pr * 4 + cr) / 5 + (sr - slum) / 7;
+                gg = (pg * 4 + cg) / 5 + (sg - slum) / 7;
+                b2 = (pb * 4 + cb) / 5 + (sb - slum) / 7;
+            } else {
+                int f = 256 + (slum - 128) * 4 / 5;        // 154..358
+                r = (cr * f >> 8) + (sr - slum) * 3 / 10;
+                gg = (cg * f >> 8) + (sg - slum) * 3 / 10;
+                b2 = (cb * f >> 8) + (sb - slum) * 3 / 10;
+                if (slum > 190) { r += 10; gg += 12; b2 += 14; }
+            }
+            g.p[i] = 0xff000000 |
+                    ((r < 0 ? 0 : r > 255 ? 255 : r) << 16) |
+                    ((gg < 0 ? 0 : gg > 255 ? 255 : gg) << 8) |
+                    (b2 < 0 ? 0 : b2 > 255 ? 255 : b2);
+        }
+    }
+
     public int head, torso, arms, legs, extra, palette;
     public int hp, maxHp, damage, speedMs, sight;
     public String name;
@@ -265,6 +345,7 @@ public final class Monster {
         drawTorso(g, m.torso, skin, dark, light, metal, steel, purple, black);
         drawHead(g, m.head, skin, dark, light, metal, steel, purple, glow, black, phase);
         drawExtraFront(g, m.extra, purple, glow, light, black, phase);
+        applyPhotoSkin(g, m.palette);
         return g;
     }
 

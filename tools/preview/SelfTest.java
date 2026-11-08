@@ -11,6 +11,8 @@ import java.lang.reflect.Method;
  *  - автосохранение RMS: снимок, восстановление уровня/тварей, «продолжить»;
  *  - спрайты монстров из всех видов частей тела;
  *  - новый ИИ: телеграфированный укус, 1 сердце, толчок не ранит;
+ *  - клаустрофобные коридоры: доля узких клеток и отсутствие больших залов;
+ *  - карта продвижения: 45 узлов ROM, 13 колонок, 4 концовки, переходы;
  *  - полный пробег: 13 этажей от старта до концовки A.
  */
 public final class SelfTest {
@@ -24,6 +26,8 @@ public final class SelfTest {
         testEnemyAI();
         testPauseAndCrosshair();
         testRomMechanics();
+        testCorridors();
+        testProgressChart();
         testFullRun();
         System.out.println("SelfTest: " + checks + " checks, " + failures + " failures");
         if (failures > 0) System.exit(1);
@@ -429,6 +433,122 @@ public final class SelfTest {
 
     // ----------------------------------------------------------- полный пробег
 
+    /** Клаустрофобность: почти все клетки — коридоры, больших залов нет. */
+    private static void testCorridors() {
+        double worst = 1.0;
+        int mostBlocks = 0;
+        for (int n = 0; n < 60; n++) {
+            Level lv = new Level(0x1a2b000 | (n * 37 + 11),
+                    540 + (n * 7) % 46, n % 13);
+            int floors = 0, corridor = 0, blocks3x3 = 0;
+            for (int y = 1; y < lv.h - 1; y++) {
+                for (int x = 1; x < lv.w - 1; x++) {
+                    if (lv.tile[lv.idx(x, y)] != Level.FLOOR) continue;
+                    floors++;
+                    int nb = 0;
+                    if (lv.tile[lv.idx(x - 1, y)] == Level.FLOOR) nb++;
+                    if (lv.tile[lv.idx(x + 1, y)] == Level.FLOOR) nb++;
+                    if (lv.tile[lv.idx(x, y - 1)] == Level.FLOOR) nb++;
+                    if (lv.tile[lv.idx(x, y + 1)] == Level.FLOOR) nb++;
+                    if (nb <= 2) corridor++;
+                }
+            }
+            for (int y = 1; y < lv.h - 2; y++) {
+                for (int x = 1; x < lv.w - 2; x++) {
+                    boolean all = true;
+                    for (int dy = 0; dy < 3 && all; dy++)
+                        for (int dx = 0; dx < 3; dx++)
+                            if (lv.tile[lv.idx(x + dx, y + dy)] != Level.FLOOR) {
+                                all = false; break;
+                            }
+                    if (all) blocks3x3++;
+                }
+            }
+            double ratio = floors == 0 ? 0 : (double) corridor / floors;
+            if (ratio < worst) worst = ratio;
+            if (blocks3x3 > mostBlocks) mostBlocks = blocks3x3;
+            check(ratio >= 0.70, "level " + n + ": corridor ratio " +
+                    (int) (ratio * 100) + "% is too open");
+            check(blocks3x3 <= 24, "level " + n + ": " + blocks3x3 +
+                    " open 3x3 halls");
+        }
+        System.out.println("  corridors: ok, min " + (int) (worst * 100) +
+                "% narrow cells, max " + mostBlocks + " 3x3 halls");
+    }
+
+    /** Экран карты продвижения: 45 узлов из ROM, 13 колонок, 4 концовки. */
+    private static void testProgressChart() throws Exception {
+        int[] rows = (int[]) field(Game.class, "ROWS").get(null);
+        String[] nodes = (String[]) field(Game.class, "NODES").get(null);
+        String[] endings = (String[]) field(Game.class, "ENDING_LABEL").get(null);
+        check(rows.length == 13, "progress chart has 13 stage columns");
+        check(endings.length == 4, "progress chart has 4 endings");
+        int sum = 0;
+        for (int i = 0; i < rows.length; i++) sum += rows[i];
+        check(sum == 45, "progress chart has 45 rooms (ROM table minus DEMO)");
+        check(nodes.length == 45, "45 four-letter ROM node names");
+        boolean namesOk = true, unique = true;
+        for (int c = 0; c < rows.length; c++) {
+            for (int r = 0; r < rows[c]; r++) {
+                String s = Game.nodeName(c, r);
+                if (s.length() != 4 || !s.equals(s.toUpperCase())) namesOk = false;
+            }
+        }
+        for (int i = 0; i < nodes.length; i++)
+            for (int j = i + 1; j < nodes.length; j++)
+                if (nodes[i].equals(nodes[j])) unique = false;
+        check(namesOk, "every node name is 4 uppercase letters");
+        check(unique, "ROM node names are unique");
+        check("ROPE".equals(Game.nodeName(0, 0)), "chart starts at ROPE");
+        check("DARK".equals(Game.nodeName(12, 0)), "chart ends at DARK");
+
+        Method nr = method(Game.class, "nextRows", new Class[] {int.class, int.class});
+        boolean edgesOk = true;
+        for (int c = 0; c < rows.length - 1; c++) {
+            for (int r = 0; r < rows[c]; r++) {
+                int p = ((Integer) nr.invoke(null,
+                        new Object[] {new Integer(c), new Integer(r)})).intValue();
+                int a = (p >> 4) & 15, b = p & 15;
+                if (a < 0 || a >= rows[c + 1] || b < 0 || b >= rows[c + 1])
+                    edgesOk = false;
+                if (a == b && rows[c + 1] > 1) edgesOk = false;
+            }
+        }
+        check(edgesOk, "every branch points to two valid nodes");
+
+        BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
+        Graphics gfx = new Graphics(img);
+        Game g = new Game(null);
+        Field fState = field(Game.class, "state");
+        tap(g, 53); tap(g, 53);                 // НОВЫЙ ЗАБЕГ -> PLAY
+        Method finish = method(Game.class, "finishLevel", new Class[] {long.class});
+        finish.invoke(g, new Object[] {new Long(System.currentTimeMillis())});
+        check(fState.getInt(g) == 7, "clearing a floor opens PROGRESS chart");
+        g.paint(gfx);
+        g.paint(gfx);
+        Renderer r = (Renderer) field(Game.class, "renderer").get(g);
+        int red = 0;
+        for (int i = 0; i < r.screen.length; i++) {
+            int c = r.screen[i];
+            if (((c >> 16) & 255) > 120 && ((c >> 8) & 255) < 110) red++;
+        }
+        check(red > 400, "progress chart draws the red/black tree (" + red + " px)");
+        int[] route = (int[]) field(Game.class, "routeRow").get(g);
+        check(route[1] >= 0 && route[1] < rows[1], "fast floor picks upper branch");
+        check(field(Game.class, "routeFast").getBoolean(g), "route records fast floor");
+        tap(g, 53);
+        check(fState.getInt(g) == 2, "chart continues to floor briefing");
+        tap(g, 53);
+        check(fState.getInt(g) == 3, "briefing continues to PLAY");
+        finish.invoke(g, new Object[] {new Long(System.currentTimeMillis())});
+        tap(g, -7);
+        check(fState.getInt(g) == 6, "right soft key pauses from chart");
+        tap(g, -7);
+        check(fState.getInt(g) == 7, "right soft key returns to chart");
+        Save.clear();
+        System.out.println("  progress chart: ok");
+    }
+
     private static void testFullRun() throws Exception {
         BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
         Graphics gfx = new Graphics(img);
@@ -471,8 +591,11 @@ public final class SelfTest {
             g.paint(gfx);
             g.paint(gfx);
             int st = fState.getInt(g);
-            check(st == 2 || st == 4, "stage " + stage + ": reached BRIEF or ENDING, got " + st);
+            check(st == 7 || st == 4,
+                    "stage " + stage + ": reached PROGRESS chart or ENDING, got " + st);
             if (st == 4) break;
+            tap(g, 53); // PROGRESS -> BRIEF
+            check(fState.getInt(g) == 2, "stage " + stage + ": chart leads to BRIEF");
             tap(g, 53); // BRIEF -> PLAY
         }
         check(fState.getInt(g) == 4, "full run reaches an ending");

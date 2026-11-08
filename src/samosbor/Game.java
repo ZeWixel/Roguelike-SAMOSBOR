@@ -28,14 +28,14 @@ public final class Game extends Canvas {
     private static final int FP = Fx.FP;
 
     private static final int TITLE = 0, HELP = 1, BRIEF = 2, PLAY = 3,
-            ENDING = 4, DEAD = 5, PAUSE = 6;
+            ENDING = 4, DEAD = 5, PAUSE = 6, PROGRESS = 7;
 
     private static final int A_UP = 0, A_DOWN = 1, A_LEFT = 2, A_RIGHT = 3,
             A_FIRE = 4, A_AIM = 5, A_MAP = 6, A_VB = 7, A_RELOAD = 8,
             A_OPT_L = 9, A_OPT_R = 10, A_BACK = 11, A_PAUSE = 12, A_COUNT = 13;
 
     private static final int SAVE_MAGIC = 0x47485332; // "GHS2"
-    private static final int SAVE_VERSION = 4;
+    private static final int SAVE_VERSION = 5;
     private static final int AUTOSAVE_MS = 12000;
     private static final int DAMAGE_COOLDOWN = 2600;
     private static final int SIREN_MS = 30000;
@@ -53,6 +53,28 @@ public final class Game extends Canvas {
         "ПРОДОЛЖИТЬ", "СОХРАНИТЬ СЕЙЧАС", "МУЗЫКА: ВКЛ",
         "УПРАВЛЕНИЕ", "ГЛАВНОЕ МЕНЮ"
     };
+
+    // ------------------------------------------------------ карта продвижения
+    // Как на экране между этажами Insmouse no Yakata: 13 колонок-этапов,
+    // 45 узлов-«комнат», ветвящееся красно-чёрное дерево и 4 концовки справа.
+    // Обозначения узлов взяты из таблицы 0x415C0 приложенного ROM (45 слов,
+    // без DEMO) — это названия этажей, а не пароли; пароли не используются.
+    private static final int[] ROWS = {
+        1, 2, 3, 4, 5, 5, 5, 5, 5, 4, 3, 2, 1
+    };
+    private static final String[] NODES = {
+        "ROPE", "ROAD", "LOVE", "ARCH", "IRON", "CAFE", "RUBY", "DOOR", "URAN",
+        "AQUA", "HIGH", "WILD", "MEAT", "WINE", "BODY", "JAZZ", "GAME", "BOOK",
+        "BALL", "GUTS", "TANK", "MASK", "HAND", "WING", "ADAM", "WOOD", "WALK",
+        "WAVE", "WEAR", "CAKE", "EROS", "SNOW", "RAIN", "GOAL", "FISH", "BONE",
+        "BABY", "INCA", "FAKE", "ALPS", "ROCK", "FOOL", "EDEN", "HYDE", "DARK"
+    };
+    private static final String[] ENDING_LABEL = {
+        "ENDING A", "ENDING B", "ENDING C", "ENDING D"
+    };
+    private static final int C_RED_DIM = 0xff741a24;
+    private static final int C_RED_MID = 0xffb02a34;
+    private static final int C_BLACK = 0xff080406;
 
     private final Main midlet;
     private int w, h, viewH, hudH;
@@ -82,6 +104,10 @@ public final class Game extends Canvas {
 
     private int runSeed, stage, floorNumber, deaths, fastFloors, totalTimeLeft,
             minFloor, ending;
+    // Пройденная ветка дерева: row[col] — номер узла в колонке col.
+    private final int[] routeRow = new int[14];
+    private boolean routeFast;
+    private int restoredState = PLAY;
 
     private Level level;
     private long timeLeftMs;
@@ -108,7 +134,9 @@ public final class Game extends Canvas {
 
         detectKeypad();
         detectSoftKeys();
-        planeLen = -(3 * FP * w) / (4 * viewH);
+        // Более узкий угол обзора (5/8 вместо 3/4): стены крупнее, боковое
+        // зрение ограничено — коридор давит сильнее.
+        planeLen = -(5 * FP * w) / (8 * viewH);
 
         textures = new Texture[16];
         String[] names = {
@@ -290,6 +318,14 @@ public final class Game extends Canvas {
                     stateSince = now;
                 }
                 break;
+            case PROGRESS:
+                // Карта между этажами: 5 (или 9 «назад») ведёт к брифингу.
+                if (a == A_FIRE || a == A_BACK || a == A_OPT_L || a == A_OPT_R) {
+                    state = BRIEF;
+                    stateSince = now;
+                    play(Audio.DOOR);
+                }
+                break;
             case PLAY:
                 if (a == A_AIM) {
                     aiming = !aiming;
@@ -350,7 +386,7 @@ public final class Game extends Canvas {
     }
 
     private void togglePause(long now) {
-        if (state == PLAY || state == BRIEF) {
+        if (state == PLAY || state == BRIEF || state == PROGRESS) {
             pauseReturn = state;
             state = PAUSE;
             pauseMenuIndex = 0;
@@ -896,6 +932,13 @@ public final class Game extends Canvas {
         if (floorNumber > 585) floorNumber = 585;
         if (floorNumber < minFloor) minFloor = floorNumber;
         stage++;
+        routeFast = pct > 50;
+        // Выбор ветки на карте продвижения: быстрый этаж = верхняя развилка,
+        // этаж «в последнюю минуту» = нижняя. Ровно как в FAQ/ROM: от времени
+        // прохождения зависит, к какой из четырёх концовок идёт маршрут.
+        int nc = stage < 13 ? stage : 12;
+        int packed = nextRows(nc - 1, routeRow[nc - 1]);
+        routeRow[stage] = routeFast ? ((packed >> 4) & 15) : (packed & 15);
         if (stage >= 13) {
             ending = Endings.choose(deaths, totalTimeLeft, magazine + reserve,
                     fastFloors, minFloor);
@@ -908,8 +951,9 @@ public final class Game extends Canvas {
             buzz(200);
         } else {
             buildLevel();
-            state = BRIEF;
+            state = PROGRESS;      // сначала карта дерева, потом брифинг этажа
             stateSince = now;
+            autosave();
         }
     }
 
@@ -923,6 +967,8 @@ public final class Game extends Canvas {
         totalTimeLeft = 0;
         minFloor = 556;
         deathReason = "";
+        for (int i = 0; i < routeRow.length; i++) routeRow[i] = 0;
+        routeFast = false;
         resetPlayer();
         buildLevel();
         state = BRIEF;
@@ -942,7 +988,8 @@ public final class Game extends Canvas {
             hasSave = false;
             return false;
         }
-        state = PLAY;
+        state = (restoredState == PROGRESS || restoredState == BRIEF)
+                ? restoredState : PLAY;
         stateSince = System.currentTimeMillis();
         music(sirenDone ? 1 : 0);
         hasSave = true;
@@ -1047,6 +1094,9 @@ public final class Game extends Canvas {
         out.writeInt(fastFloors);
         out.writeInt(totalTimeLeft);
         out.writeInt(minFloor);
+        out.writeInt(state);
+        for (int i = 0; i < routeRow.length; i++) out.writeInt(routeRow[i]);
+        out.writeBoolean(routeFast);
         out.writeInt(health);
         out.writeInt(magazine);
         out.writeInt(reserve);
@@ -1080,6 +1130,9 @@ public final class Game extends Canvas {
             fastFloors = in.readInt();
             totalTimeLeft = in.readInt();
             minFloor = in.readInt();
+            restoredState = in.readInt();
+            for (int i = 0; i < routeRow.length; i++) routeRow[i] = in.readInt();
+            routeFast = in.readBoolean();
             health = in.readInt();
             magazine = in.readInt();
             reserve = in.readInt();
@@ -1152,6 +1205,7 @@ public final class Game extends Canvas {
             case TITLE: drawTitle(buf, now); break;
             case HELP: drawHelp(buf); break;
             case BRIEF: drawBrief(buf); break;
+            case PROGRESS: drawProgress(buf, now); break;
             case PLAY:
                 renderer.render(level, posX, posY, dirX, dirY, planeX, planeY, now);
                 if (aiming) drawWeapon(buf, now);
@@ -1232,7 +1286,7 @@ public final class Game extends Canvas {
 
     // --------------------------------------------------------------- оружие 1-е лицо
 
-    private static Raster makeWeapon() {
+    private Raster makeWeapon() {
         // «Ералашников» ликвидатора: крупный пистолет из нижнего правого угла,
         // ствол смотрит вверх-вправо к центру прицела.
         Raster g = new Raster(64, 54);
@@ -1292,6 +1346,8 @@ public final class Game extends Canvas {
         for (int i = 0; i < 4; i++) {
             g.line(12 + i * 4, 43, 14 + i * 4, 39, gloveLight, 2);
         }
+        // Ржавая сталь гермодвери как настоящая фактура оружия.
+        g.photoGrain(textures[3], 78);
         return g;
     }
 
@@ -1378,7 +1434,7 @@ public final class Game extends Canvas {
             "* ОЧКИ VIRTUAL BOY",
             "# КАРТА ЭТАЖА (ТАЙМЕР СТОИТ)",
             "ПРАВ. СОФТ - МЕНЮ ПАУЗЫ",
-            "",
+            "МЕЖДУ ЭТАЖАМИ: КАРТА ПУТИ",
             "ЦЕЛЬ: ПРОПУСК + ГЕРМОДВЕРЬ",
             "ДО НАЧАЛА САМОСБОРА",
             "АВТОСОХРАНЕНИЕ КАЖДЫЕ 12 С",
@@ -1407,7 +1463,7 @@ public final class Game extends Canvas {
         BitmapFont.drawShadow(buf, w, h, "7 ОРУЖИЕ  # КАРТА  * VB", 14, y + 56, C_PURPLE, 1);
         BitmapFont.drawShadow(buf, w, h, "ТВАРИ МЕДЛЕННЫ, НО БЛОКИРУЮТ", 14, y + 70, C_GREY, 1);
         center("АВТОСОХРАНЕНИЕ: ВКЛЮЧЕНО", 182, C_GREEN, 1);
-        center("5  НАЧАТЬ ЗАБЕГ", 206, C_YELLOW, 1);
+        center("5  ВОЙТИ В ЭТАЖ", 206, C_YELLOW, 1);
     }
 
     private void drawEnding(int[] buf, long now) {
@@ -1487,6 +1543,159 @@ public final class Game extends Canvas {
                 ? pauseNote : "ТАЙМЕР И ТВАРИ ОСТАНОВЛЕНЫ";
         center(note, boxY + 136, C_GREEN, 1);
         center("2/8 ВЫБОР  5 OK  ПРАВ.СОФТ = НАЗАД", boxY + 150, C_GREY, 1);
+    }
+
+    // ------------------------------------------- карта продвижения по этажам
+
+    private static int nodeBase(int c) {
+        int b = 0;
+        for (int i = 0; i < c; i++) b += ROWS[i];
+        return b;
+    }
+
+    /** Название узла из таблицы ROM (4 буквы). */
+    protected static String nodeName(int c, int r) {
+        int i = nodeBase(c) + r;
+        if (i < 0 || i >= NODES.length) return "----";
+        return NODES[i];
+    }
+
+    /** Два выхода из узла: верхняя (быстрая) и нижняя (медленная) ветки. */
+    private static int nextRows(int c, int r) {
+        if (c < 0 || c >= ROWS.length - 1) return (r << 4) | r;
+        int n = ROWS[c + 1], cur = ROWS[c];
+        int a, b;
+        if (n > cur) { a = r; b = r + 1; }              // расширение ромба
+        else if (n < cur) {                            // сужение к концовкам
+            a = r > n - 1 ? n - 1 : r;
+            b = a > 0 ? a - 1 : (a + 1 < n ? a + 1 : a);
+        } else {                                       // середина: две развилки
+            a = r;
+            b = r + 1 < n ? r + 1 : (r > 0 ? r - 1 : r);
+        }
+        if (a < 0) a = 0; else if (a >= n) a = n - 1;
+        if (b < 0) b = 0; else if (b >= n) b = n - 1;
+        return (a << 4) | b;
+    }
+
+    private static int chartX(int c) { return 10 + c * 14; }
+
+    private static int chartY(int c, int r) {
+        return 70 + (((5 - ROWS[c]) * 22) >> 1) + r * 22;
+    }
+
+    private void line(int[] buf, int x0, int y0, int x1, int y1, int c) {
+        int dx = x1 - x0, dy = y1 - y0;
+        int n = Math.abs(dx) > Math.abs(dy) ? Math.abs(dx) : Math.abs(dy);
+        if (n == 0) n = 1;
+        for (int i = 0; i <= n; i++) {
+            int x = x0 + dx * i / n, y = y0 + dy * i / n;
+            if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c;
+        }
+    }
+
+    /** Орнаментальная красно-чёрная кайма как на референс-скриншоте. */
+    private void drawOrnament(int[] buf, int y0) {
+        for (int cx = 4; cx < w + 10; cx += 14) {
+            for (int dy = -4; dy <= 4; dy++) {
+                int half = 4 - (dy < 0 ? -dy : dy);
+                hline(buf, cx - half, cx + half, y0 + 4 + dy, C_RED);
+            }
+            for (int dy = -2; dy <= 2; dy++) {
+                int half = 2 - (dy < 0 ? -dy : dy);
+                hline(buf, cx - half, cx + half, y0 + 4 + dy, C_BLACK);
+            }
+            hline(buf, cx - 1, cx + 1, y0 + 4, C_RED);
+        }
+        hline(buf, 0, w - 1, y0 - 1, C_RED_DIM);
+        hline(buf, 0, w - 1, y0 + 9, C_RED_DIM);
+    }
+
+    private void drawNode(int[] buf, int cx, int cy, int c, boolean filled) {
+        if (filled) {
+            box(buf, cx - 3, cy - 3, 7, 7, c, c);
+            box(buf, cx - 1, cy - 1, 3, 3, C_BLACK, C_BLACK);
+            return;
+        }
+        for (int dy = -4; dy <= 4; dy++) {
+            int half = 4 - (dy < 0 ? -dy : dy);
+            hline(buf, cx - half, cx + half, cy + dy, c);
+        }
+        box(buf, cx - 2, cy - 2, 5, 5, C_BLACK, C_BLACK);
+        box(buf, cx - 1, cy - 1, 3, 3, c, c);
+    }
+
+    private void drawProgress(int[] buf, long now) {
+        fill(buf, C_BLACK);
+        drawOrnament(buf, 8);
+        center("КАРТА ПРОДВИЖЕНИЯ", 26, C_RED, 1);
+
+        int col = stage < 13 ? stage : 12;
+        String here = nodeName(col, routeRow[col]);
+        BitmapFont.drawShadow(buf, w, h, here + "  /  ЭТАЖ " + floorNumber,
+                8, 40, C_RED, 1);
+        BitmapFont.drawShadow(buf, w, h, "УЗЛОВ: 45    ПУТЬ: 13",
+                8, 52, C_GREY, 1);
+
+        // --- все рёбра дерева ---
+        for (int c = 0; c < ROWS.length - 1; c++) {
+            for (int r = 0; r < ROWS[c]; r++) {
+                int p = nextRows(c, r);
+                int a = (p >> 4) & 15, b = p & 15;
+                int x0 = chartX(c), y0 = chartY(c, r);
+                line(buf, x0, y0, chartX(c + 1), chartY(c + 1, a), C_RED_DIM);
+                line(buf, x0, y0, chartX(c + 1), chartY(c + 1, b), C_RED_DIM);
+            }
+        }
+
+        // --- пройденный маршрут ---
+        for (int c = 0; c < col; c++) {
+            line(buf, chartX(c), chartY(c, routeRow[c]),
+                    chartX(c + 1), chartY(c + 1, routeRow[c + 1]), C_RED);
+        }
+
+        // --- узлы ---
+        boolean blink = ((now / 350) & 1) == 0;
+        for (int c = 0; c < ROWS.length; c++) {
+            for (int r = 0; r < ROWS[c]; r++) {
+                int cx = chartX(c), cy = chartY(c, r);
+                boolean visited = c <= col;
+                boolean onRoute = visited && routeRow[c] == r;
+                int col2 = onRoute ? C_RED : C_RED_DIM;
+                drawNode(buf, cx, cy, col2, c == 0);
+                if (c == col && onRoute) {
+                    int cur = blink ? C_YELLOW : C_WHITE;
+                    hline(buf, cx - 6, cx + 6, cy - 6, cur);
+                    hline(buf, cx - 6, cx + 6, cy + 6, cur);
+                    vline(buf, cx - 6, cy - 6, cy + 6, cur);
+                    vline(buf, cx + 6, cy - 6, cy + 6, cur);
+                }
+            }
+        }
+
+        // --- четыре концовки справа ---
+        vline(buf, 180, 76, 158, C_RED_DIM);
+        line(buf, chartX(12), chartY(12, 0), 180, 114, C_RED_DIM);
+        for (int i = 0; i < ENDING_LABEL.length; i++) {
+            int ly = 78 + i * 26;
+            line(buf, 180, 114, 180, ly, C_RED_DIM);
+            hline(buf, 180, 184, ly, C_RED_MID);
+            BitmapFont.drawShadow(buf, w, h, ENDING_LABEL[i], 185, ly - 3,
+                    C_RED, 1);
+        }
+
+        hline(buf, 6, w - 7, 188, C_RED_DIM);
+        BitmapFont.drawShadow(buf, w, h,
+                "ЭТАП " + stage + " ИЗ 13 ПРОЙДЕН", 10, 198, C_WHITE, 1);
+        BitmapFont.drawShadow(buf, w, h,
+                (routeFast ? "ЛИФТ ВВЕРХ" : "ЛИФТ ВНИЗ") + "  ->  " + here,
+                10, 212, C_GREEN, 1);
+        BitmapFont.drawShadow(buf, w, h,
+                "СЕРДЕЦ " + health + "   ПАТР " + magazine + "/" + reserve +
+                        "   БЫСТРЫХ " + fastFloors,
+                10, 226, C_GREY, 1);
+        center("5 - ДАЛЬШЕ    ПРАВ.СОФТ - ПАУЗА", 252, C_YELLOW, 1);
+        drawOrnament(buf, h - 30);
     }
 
     // ---------------------------------------------------------------------- HUD

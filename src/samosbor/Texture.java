@@ -4,7 +4,9 @@ import javax.microedition.lcdui.Image;
 
 /**
  * Текстура из PNG. Взято из движка Mecasting (classes.Texture, Роман Лагин)
- * и адаптировано: все текстуры 64x64, степень двойки, индексированный PNG.
+ * и адаптировано: стены/пол 64x64 (степень двойки, 256-цветный
+ * индексированный PNG), макро-снимки кожи для спрайтов 40x56 (truecolor PNG).
+ * Оба варианта читаются MIDP Image.createImage(); при ошибке — solid().
  */
 public final class Texture {
 

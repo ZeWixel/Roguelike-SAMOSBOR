@@ -50,10 +50,7 @@ public final class Renderer {
         yToDistance[sh / 2] = yToDistance[sh / 2 + 1];
         for (int y = 0; y < sh / 2; y++) yToDistance[y] = yToDistance[sh - 1 - y];
         for (int y = 0; y < sh; y++) {
-            int f = 256 - (yToDistance[y] >> 8);
-            if (f < 40) f = 40;
-            if (f > 256) f = 256;
-            fogRow[y] = f;
+            fogRow[y] = fogByDist(yToDistance[y]);
         }
         for (int i = 0; i < deltaDiv.length; i++) {
             if (i != 8192) deltaDiv[i] = FPSQR / (i - 8192);
@@ -71,7 +68,11 @@ public final class Renderer {
     }
 
     private static int fogByDist(long d) {
-        int f = 256 - (int) (d >> 8);
+        // Туман наступает на 25% быстрее, чем в первой версии: дальний конец
+        // коридора тонет во тьме, проход кажется короче и теснее — как узкие
+        // этажи Insmouse no Yakata. Яркость сохранена, чтобы была видна новая
+        // фотографическая фактура бетона и ржавчины.
+        int f = 256 - (int) ((d + (d >> 2)) >> 8);
         if (f < 40) f = 40;
         if (f > 256) f = 256;
         return f;
@@ -312,7 +313,7 @@ public final class Renderer {
 
     // ------------------------------------------------------- спрайты предметов
 
-    private static Raster makeItemSprite(int type) {
+    private Raster makeItemSprite(int type) {
         Raster g = new Raster(24, 24);
         int black = 0xff101018;
         int steel = 0xff9a9ca0;
@@ -361,6 +362,9 @@ public final class Renderer {
             default:
                 break;
         }
+        // Предметы тоже получают настоящую фактуру (сталь / слизь).
+        boolean orb = (type == Level.ITEM_WHITE || type == Level.ITEM_BLACK);
+        g.photoGrain(tex[orb ? 12 : 3], 54);
         return g;
     }
 }

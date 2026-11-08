@@ -16,6 +16,33 @@ public final class Raster {
         p = new int[w * h];
     }
 
+    /**
+     * Накладывает фактуру настоящей фотографии поверх плоских заливок:
+     * яркость из макро-снимка модулирует цвет, а его хрома добавляет
+     * ржавчину/патину. strength — размах модуляции (обычно 60..100).
+     */
+    public void photoGrain(Texture t, int strength) {
+        if (t == null || t.w < 1 || t.h < 1) return;
+        int[] tp = t.rgb;
+        for (int i = 0; i < p.length; i++) {
+            int c = p[i];
+            if ((c >>> 24) == 0) continue;
+            int x = i % w, y = i / w;
+            int tc = tp[(y % t.h) * t.w + (x % t.w)];
+            int tr = (tc >> 16) & 255, tg = (tc >> 8) & 255, tb = tc & 255;
+            int lum = (tr * 77 + tg * 150 + tb * 29) >> 8;
+            int f = 256 + ((lum - 128) * strength) / 128;
+            int cr = (c >> 16) & 255, cg = (c >> 8) & 255, cb = c & 255;
+            int r = (cr * f >> 8) + (tr - lum) / 5;
+            int g = (cg * f >> 8) + (tg - lum) / 5;
+            int b = (cb * f >> 8) + (tb - lum) / 5;
+            p[i] = 0xff000000 |
+                    ((r < 0 ? 0 : r > 255 ? 255 : r) << 16) |
+                    ((g < 0 ? 0 : g > 255 ? 255 : g) << 8) |
+                    (b < 0 ? 0 : b > 255 ? 255 : b);
+        }
+    }
+
     /** Вызывается один раз после того, как спрайт дорисован. */
     public void buildVb() {
         vb = new int[p.length];
