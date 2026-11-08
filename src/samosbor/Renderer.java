@@ -69,9 +69,9 @@ public final class Renderer {
 
     private static int fogByDist(long d) {
         // Туман наступает на 25% быстрее, чем в первой версии: дальний конец
-        // зала тонет во тьме, широкий проход читается как тесный — как в
-        // сумрачных интерьерах Insmouse no Yakata. Яркость сохранена, чтобы
-        // была видна фотографическая фактура бетона и ржавчины.
+        // коридора тонет во тьме, одноклеточный проход читается как тесный —
+        // как в сумрачных интерьерах Insmouse no Yakata. Яркость сохранена,
+        // чтобы была видна фотографическая фактура бетона и ржавчины.
         int f = 256 - (int) ((d + (d >> 2)) >> 8);
         if (f < 40) f = 40;
         if (f > 256) f = 256;
@@ -152,7 +152,8 @@ public final class Renderer {
                 if (cy < 0) cy = 0; else if (cy >= lv.h) cy = lv.h - 1;
                 cell = cx + cy * lv.w;
                 lv.seen[cell] = true;
-                if (lv.tile[cell] != Level.FLOOR) break;
+                // Открытая дверь — сквозная, закрытая рисуется как стена.
+                if (!Level.isTransparent(lv.tile[cell] & 0xff)) break;
             }
 
             int perpWallDist;

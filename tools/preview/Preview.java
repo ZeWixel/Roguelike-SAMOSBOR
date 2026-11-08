@@ -219,11 +219,74 @@ public final class Preview {
         save(img, new File(d, "11-pause.png"));
         tap(g, -7);                                       // снять паузу
 
+        if (forceDoor(g)) {
+            g.paint(g2);
+            save(img, new File(d, "13-door.png"));         // дверь квартиры
+            enterApartment(g);
+            g.paint(g2);
+            save(img, new File(d, "14-apartment.png"));    // внутри квартиры
+        }
+
         forceProgress(g);
         g.paint(g2);
         save(img, new File(d, "12-progress.png"));         // карта продвижения
         Save.clear();
         System.out.println("capture done -> " + dir);
+    }
+
+    private static int demoDoorX = -1, demoDoorY = -1;
+
+    private static int degOf(int vx, int vy) {
+        return vx < 0 ? 0 : (vx > 0 ? 180 : (vy < 0 ? 90 : 270));
+    }
+
+    /** Для кадра: смотрим из дальней клетки квартиры на ЗАКРЫТУЮ дверь. */
+    private static boolean forceDoor(Game g) throws Exception {
+        Level lv = (Level) field(Game.class, "level").get(g);
+        int[] dxs = {1, -1, 0, 0}, dys = {0, 0, 1, -1};
+        for (int y = 1; y < lv.h - 1; y++) {
+            for (int x = 1; x < lv.w - 1; x++) {
+                if (lv.tile[lv.idx(x, y)] != Level.DOOR) continue;
+                for (int k = 0; k < 4; k++) {
+                    int ax = x + dxs[k], ay = y + dys[k];   // коридор
+                    int bx = x - dxs[k], by = y - dys[k];   // первая клетка комнаты
+                    if (lv.tile[lv.idx(ax, ay)] != Level.FLOOR) continue;
+                    if (lv.tile[lv.idx(bx, by)] != Level.FLOOR) continue;
+                    int dxc = bx - x, dyc = by - y;         // вглубь квартиры
+                    int rx = bx + dxc, ry = by + dyc;       // дальняя клетка
+                    if (lv.tile[lv.idx(rx, ry)] != Level.FLOOR) continue;
+                    demoDoorX = x; demoDoorY = y;
+                    placeForShot(g, lv, rx, ry, degOf(-dxc, -dyc));
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Для кадра: распахиваем дверь — в проёме становится виден коридор. */
+    private static void enterApartment(Game g) throws Exception {
+        Level lv = (Level) field(Game.class, "level").get(g);
+        lv.openDoor(demoDoorX, demoDoorY);
+    }
+
+    private static void placeForShot(Game g, Level lv, int px, int py, int deg)
+            throws Exception {
+        field(Game.class, "playerTX").setInt(g, px);
+        field(Game.class, "playerTY").setInt(g, py);
+        field(Game.class, "posX").setInt(g, px * Fx.FP + Fx.FP / 2);
+        field(Game.class, "posY").setInt(g, py * Fx.FP + Fx.FP / 2);
+        field(Game.class, "dirDeg").setInt(g, deg);
+        java.lang.reflect.Method sv = Game.class.getDeclaredMethod("setVectors", new Class[0]);
+        sv.setAccessible(true);
+        sv.invoke(g, new Object[0]);
+        for (int dy = -5; dy <= 5; dy++)
+            for (int dx = -5; dx <= 5; dx++) lv.markSeen(px + dx, py + dy);
+        lv.computeDist(px, py);
+        for (int i = 0; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
+        field(Game.class, "message").set(g, "");
+        field(Game.class, "messageUntil").setLong(g, 0L);
+        field(Game.class, "hudDirty").setBoolean(g, true);
     }
 
     /** Для кадра/превью: показать дерево этажей на середине забега. */
@@ -256,7 +319,7 @@ public final class Preview {
                 for (int k = 0; k < 4; k++) {
                     int mx = x - dxs[k], my = y - dys[k];
                     int px = x + dxs[k], py = y + dys[k];
-                    if (lv.isWall(mx, my) || lv.isWall(px, py)) continue;
+                    if (lv.isBlocking(mx, my) || lv.isBlocking(px, py)) continue;
                     Monster m = lv.monsters[0];
                     m.place(mx, my);
                     for (int i = 1; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
@@ -305,7 +368,7 @@ public final class Preview {
         int mx = px, my = py;
         for (int step = 1; step <= 2; step++) {
             int nx = px + dx * step, ny = py + dy * step;
-            if (lv.isWall(nx, ny)) break;   // не ставить за стеной
+            if (lv.isBlocking(nx, ny)) break;   // не ставить за стеной/дверью
             mx = nx; my = ny;
         }
         // Самая крупная/яркая тварь уровня — в центр коридора

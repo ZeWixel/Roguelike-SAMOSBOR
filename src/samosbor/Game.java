@@ -151,9 +151,13 @@ public final class Game extends Canvas {
             detectSoftKeys();
         } catch (Throwable t) {
         }
-        // Узкий угол обзора (5/8 вместо 3/4) и быстрый туман держат ощущение
-        // тесноты, хотя проходы теперь двуклеточные (Insmouse no Yakata).
-        planeLen = -(5 * FP * w) / (8 * viewH);
+        // КВАДРАТНЫЙ ТАЙЛ 1:1. Высота стены на экране = viewH / dist,
+        // ширина одной клетки = (w/2) * FP / |plane|. Приравниваем их:
+        // |plane| = FP * w / (2 * viewH). Коридор остаётся шириной в ОДНУ
+        // клетку, но сама клетка теперь не «уже, чем выше» (было 5/8), а
+        // рисуется квадратной — проход выглядит шире ровно на 25%, как на
+        // скринах Insmouse no Yakata. Угол обзора при этом ~49° вместо ~59°.
+        planeLen = -(FP * w) / (2 * viewH);
 
         textures = new Texture[16];
         String[] names = {
@@ -607,8 +611,14 @@ public final class Game extends Canvas {
         }
     }
 
+    /** Движение твари: по пути она распахивает обычные двери квартир. */
+    private void startMove(Monster m, int nx, int ny) {
+        level.openDoor(nx, ny);
+        m.toX = nx; m.toY = ny; m.moveT = 0; m.moving = true;
+    }
+
     /**
-     * Боковой обход: в коридоре шириной две клетки тварь не обязана переть
+     * Боковой обход: в квадратном тайле тварь не обязана переть
      * в лоб — она смещается перпендикулярно линии на игрока и заходит сбоку.
      * Возвращает false, если бок закрыт стеной/другой тварью.
      */
@@ -623,7 +633,7 @@ public final class Game extends Canvas {
         if (nx == px && ny == py) return false;
         int nd = (nx > px ? nx - px : px - nx) + (ny > py ? ny - py : py - ny);
         if (nd > 6) return false;               // не убегаем из боя
-        m.toX = nx; m.toY = ny; m.moveT = 0; m.moving = true;
+        startMove(m, nx, ny);
         return true;
     }
 
@@ -695,7 +705,7 @@ public final class Game extends Canvas {
                         if (d > bestD) { bestD = d; bx = nx; by = ny; }
                     }
                     if (bx != m.tileX || by != m.tileY) {
-                        m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
+                        startMove(m, bx, by);
                     }
                 }
                 continue;
@@ -735,7 +745,7 @@ public final class Game extends Canvas {
                             if (nd >= 0 && nd < bestD) { bestD = nd; bx = nx; by = ny; }
                         }
                         if (bx != m.tileX || by != m.tileY) {
-                            m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
+                            startMove(m, bx, by);
                         }
                     }
                 } else if (now >= m.nextWander && aiRng.chance(28)) {
@@ -755,7 +765,7 @@ public final class Game extends Canvas {
                     int hdy = ny - m.homeY; if (hdy < 0) hdy = -hdy;
                     if (hdx + hdy <= 3 && !level.isWall(nx, ny) &&
                             !monsterOccupies(nx, ny, m)) {
-                        m.toX = nx; m.toY = ny; m.moveT = 0; m.moving = true;
+                        startMove(m, nx, ny);
                     }
                 }
             }
@@ -836,7 +846,15 @@ public final class Game extends Canvas {
             else setMessage("ГЕРМОДВЕРЬ: НУЖЕН ПРОПУСК", C_YELLOW);
             return;
         }
-        if (t != Level.FLOOR) {
+        if (t == Level.DOOR) {
+            // Обычная дверь квартиры: толчок распахивает её, и шаг сразу
+            // заходит внутрь (гермодверь отдельно — ей нужен пропуск).
+            level.openDoor(tx, ty);
+            play(Audio.DOOR);
+            setMessage("ДВЕРЬ ОТКРЫТА: КВАРТИРА", C_YELLOW);
+            t = Level.DOOR_OPEN;
+        }
+        if (t != Level.FLOOR && t != Level.DOOR_OPEN) {
             setMessage("БЕТОН. НЕ ПРОЙТИ", C_GREY);
             return;
         }
@@ -1095,7 +1113,7 @@ public final class Game extends Canvas {
         int[] deg = {0, 90, 180, 270};
         for (int k = 0; k < 4; k++) {
             int nx = playerTX + vx[k], ny = playerTY + vy[k];
-            if (level.isWall(nx, ny)) continue;
+            if (level.isBlocking(nx, ny)) continue;   // не стартуем лицом в дверь
             int d = level.dist[level.idx(nx, ny)];
             if (d > bestD) { bestD = d; bestDeg = deg[k]; }
         }
@@ -1920,6 +1938,8 @@ public final class Game extends Canvas {
                 int c;
                 if (!level.seen[i]) c = 0xff1a1024;
                 else if (level.tile[i] == Level.FLOOR) c = 0xff50505a;
+                else if (level.tile[i] == Level.DOOR_OPEN) c = 0xff6a4b32;
+                else if (level.tile[i] == Level.DOOR) c = 0xffc08040;
                 else if (level.tile[i] == Level.EXIT) c = 0xffd8cf40;
                 else if (level.tile[i] == Level.CRACKED) c = 0xff8b2c9b;
                 else c = 0xff24202c;

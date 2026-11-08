@@ -12,8 +12,7 @@ import java.lang.reflect.Method;
  *  - спрайты монстров из всех видов частей тела;
  *  - новый ИИ: телеграфированный укус, 1 сердце, толчок не ранит;
  *  - старт на J2ME Loader: getKeyName() бросает «unknown keycode -9»;
- *  - широкие коридоры Insmouse no Yakata: двуклеточные проходы, залы,
- *    связность и место для бокового манёвра тварей;
+ *  - квадратный тайл 1:1, одноклеточные коридоры, квартиры за дверями;
  *  - карта продвижения: 45 узлов ROM, 13 колонок, 4 концовки, переходы;
  *  - плавный доворот камеры: дробные sin/cos, ease-in-out, логика ровно 90°;
  *  - полный пробег: 13 этажей от старта до концовки A.
@@ -30,6 +29,8 @@ public final class SelfTest {
         testEnemyAI();
         testPauseAndCrosshair();
         testRomMechanics();
+        testSquareTiles();
+        testDoors();
         testCorridors();
         testProgressChart();
         testSmoothTurn();
@@ -223,7 +224,7 @@ public final class SelfTest {
         int[] dxs = {1, -1, 0, 0};
         int[] dys = {0, 0, 1, -1};
         for (int k = 0; k < 4; k++) {
-            if (!lv.isWall(px + dxs[k], py + dys[k])) {
+            if (!lv.isBlocking(px + dxs[k], py + dys[k])) {
                 ax = px + dxs[k]; ay = py + dys[k];
                 break;
             }
@@ -376,7 +377,7 @@ public final class SelfTest {
                 for (int k = 0; k < 4; k++) {
                     int ax = x - dxs[k], ay = y - dys[k];
                     int bx = x + dxs[k], by = y + dys[k];
-                    if (lv2.isWall(ax, ay) || lv2.isWall(bx, by)) continue;
+                    if (lv2.isBlocking(ax, ay) || lv2.isBlocking(bx, by)) continue;
                     wx = x; wy = y; mx = ax; my = ay; px = bx; py = by;
                     break;
                 }
@@ -386,8 +387,8 @@ public final class SelfTest {
             // На редком сиде трещин может не оказаться рядом с коридором — создаём «B».
             for (int y = 1; y < lv2.h - 1 && wx < 0; y++) {
                 for (int x = 1; x < lv2.w - 1 && wx < 0; x++) {
-                    if (!lv2.isWall(x, y)) continue;
-                    if (!lv2.isWall(x - 1, y) && !lv2.isWall(x + 1, y)) {
+                    if (!lv2.isBlocking(x, y)) continue;
+                    if (!lv2.isBlocking(x - 1, y) && !lv2.isBlocking(x + 1, y)) {
                         lv2.tile[lv2.idx(x, y)] = Level.CRACKED;
                         wx = x; wy = y; mx = x - 1; my = y; px = x + 1; py = y;
                     }
@@ -488,84 +489,178 @@ public final class SelfTest {
         System.out.println("  J2ME Loader startup: ok (unknown keycode -9 tolerated)");
     }
 
-    /** Ширина коридоров, залы, связность и место для манёвра тварей. */
+    /** Квадратный тайл 1:1: ширина клетки на экране равна её высоте. */
+    private static void testSquareTiles() throws Exception {
+        Game g = new Game(null);
+        int plane = Math.abs(field(Game.class, "planeLen").getInt(g));
+        int sw = field(Game.class, "w").getInt(g);
+        int viewH = field(Game.class, "viewH").getInt(g);
+        int expected = (Fx.FP * sw) / (2 * viewH);
+        check(plane == expected, "planeLen = FP*w/(2*viewH), not the old 5/8");
+        // Высота стены на dist=1 равна viewH; ширина клетки = (sw/2)*FP/|plane|.
+        int tileW = (sw * Fx.FP) / (2 * plane);
+        check(Math.abs(tileW - viewH) <= 2,
+                "tile face is square 1:1 (" + tileW + "x" + viewH + " px at 1 cell)");
+        int oldPlane = (5 * Fx.FP * sw) / (8 * viewH);
+        int oldW = (sw * Fx.FP) / (2 * oldPlane);
+        check(tileW > oldW && (tileW * 4) / 5 >= oldW,
+                "square tile is ~25% wider than the old portrait tile (" +
+                        oldW + " -> " + tileW + ")");
+        check(Level.isTransparent(Level.FLOOR), "floor passes the ray");
+        check(!Level.isTransparent(Level.DOOR), "closed door stops the ray");
+        check(Level.isTransparent(Level.DOOR_OPEN), "open doorway passes the ray");
+        System.out.println("  square tiles: ok (" + tileW + "x" + viewH +
+                " px, was " + oldW + ")");
+    }
+
+    /** Обычная дверь квартиры: толчком открывается и пропускает внутрь. */
+    private static void testDoors() throws Exception {
+        Game g = new Game(null);
+        tap(g, 53);
+        tap(g, 53);
+        Level lv = (Level) field(Game.class, "level").get(g);
+        Field fPX = field(Game.class, "playerTX");
+        Field fPY = field(Game.class, "playerTY");
+        Field fPosX = field(Game.class, "posX");
+        Field fPosY = field(Game.class, "posY");
+        Field fDeg = field(Game.class, "dirDeg");
+        Method navigate = method(Game.class, "navigate",
+                new Class[] {int.class, long.class});
+        Method setVectors = method(Game.class, "setVectors", new Class[0]);
+        for (int i = 0; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
+
+        int[] dxs = {1, -1, 0, 0}, dys = {0, 0, 1, -1};
+        int doorX = -1, doorY = -1, cx = -1, cy = -1, rx = -1, ry = -1;
+        for (int y = 1; y < lv.h - 1 && doorX < 0; y++) {
+            for (int x = 1; x < lv.w - 1 && doorX < 0; x++) {
+                if (lv.tile[lv.idx(x, y)] != Level.DOOR) continue;
+                for (int k = 0; k < 4; k++) {
+                    int ax = x + dxs[k], ay = y + dys[k];   // сторона коридора
+                    int bx = x - dxs[k], by = y - dys[k];   // сторона квартиры
+                    if (lv.tile[lv.idx(ax, ay)] != Level.FLOOR) continue;
+                    if (lv.tile[lv.idx(bx, by)] != Level.FLOOR) continue;
+                    doorX = x; doorY = y; cx = ax; cy = ay; rx = bx; ry = by;
+                    break;
+                }
+            }
+        }
+        check(doorX >= 0, "apartment door connects a corridor and a room");
+        if (doorX < 0) { Save.clear(); return; }
+        check(lv.isBlocking(doorX, doorY), "closed door blocks ray and step");
+
+        int deg = (doorX > cx) ? 180 : (doorX < cx ? 0 : (doorY < cy ? 90 : 270));
+        fDeg.setInt(g, deg);
+        setVectors.invoke(g, new Object[0]);
+        fPX.setInt(g, cx); fPY.setInt(g, cy);
+        fPosX.setInt(g, cx * Fx.FP + Fx.FP / 2);
+        fPosY.setInt(g, cy * Fx.FP + Fx.FP / 2);
+
+        long now = 500000L;
+        navigate.invoke(g, new Object[] {new Integer(0), new Long(now)});
+        check(lv.tile[lv.idx(doorX, doorY)] == Level.DOOR_OPEN,
+                "bump opens the apartment door");
+        check(fPX.getInt(g) == doorX && fPY.getInt(g) == doorY,
+                "player steps into the doorway in the same move");
+        check(!lv.isBlocking(doorX, doorY), "open doorway is passable");
+        check(!lv.openDoor(doorX, doorY), "opening an open door is a no-op");
+
+        navigate.invoke(g, new Object[] {new Integer(0), new Long(now + 300)});
+        check(fPX.getInt(g) == rx && fPY.getInt(g) == ry,
+                "player enters the apartment room");
+
+        // Тварь тоже распахивает двери на своём пути.
+        int mx = -1, my = -1;
+        for (int y = 1; y < lv.h - 1 && mx < 0; y++) {
+            for (int x = 1; x < lv.w - 1 && mx < 0; x++) {
+                if (lv.tile[lv.idx(x, y)] == Level.DOOR) { mx = x; my = y; }
+            }
+        }
+        check(mx >= 0, "another closed apartment door exists");
+        if (mx >= 0) {
+            Method startMove = method(Game.class, "startMove",
+                    new Class[] {Monster.class, int.class, int.class});
+            startMove.invoke(g, new Object[] {lv.monsters[0],
+                    new Integer(mx), new Integer(my)});
+            check(lv.tile[lv.idx(mx, my)] == Level.DOOR_OPEN,
+                    "monster opens an apartment door on its way");
+            check(lv.monsters[0].toX == mx && lv.monsters[0].toY == my &&
+                    lv.monsters[0].moving, "monster moves into the doorway");
+        }
+        Save.clear();
+        System.out.println("  apartment doors: ok (bump to open, step inside, AI opens too)");
+    }
+
+    /** Коридоры в одну клетку + квартиры за обычными дверями. */
     private static void testCorridors() {
-        double worstWide = 1.0, worstSide = 1.0, fewestWalls = 1.0, worstMonN = 99.0;
-        int fewestBlocks = 1 << 30, mostBlocks = 0;
+        double worstNarrow = 1.0, fewestWalls = 1.0;
+        int fewestDoors = 1 << 30, mostDoors = 0, fewestRoomCells = 1 << 30;
         for (int n = 0; n < 60; n++) {
             Level lv = new Level(0x1a2b000 | (n * 37 + 11),
                     540 + (n * 7) % 46, n % 13);
             lv.computeDist(lv.startX, lv.startY);
-            int floors = 0, walls = 0, wide = 0, side = 0, blocks3x3 = 0, unreachable = 0;
+            int floors = 0, walls = 0, narrow = 0, doors = 0, doorsOk = 0,
+                    roomCells = 0, unreachable = 0;
             for (int y = 1; y < lv.h - 1; y++) {
                 for (int x = 1; x < lv.w - 1; x++) {
                     int i = lv.idx(x, y);
-                    if (lv.tile[i] != Level.FLOOR) { walls++; continue; }
+                    int t = lv.tile[i] & 0xff;
+                    if (t == Level.DOOR) {
+                        doors++;
+                        int sides = 0;
+                        for (int k = 0; k < 4; k++) {
+                            int nx = x + (k == 0 ? 1 : (k == 1 ? -1 : 0));
+                            int ny = y + (k == 2 ? 1 : (k == 3 ? -1 : 0));
+                            if (!lv.isBlocking(nx, ny)) sides++;
+                        }
+                        if (sides == 2) doorsOk++;  // ровно коридор + квартира
+                        walls++;
+                        continue;
+                    }
+                    if (t != Level.FLOOR) { walls++; continue; }
                     floors++;
                     if (lv.dist[i] < 0) unreachable++;
-                    int open9 = 0, deg = 0;
-                    for (int dy = -1; dy <= 1; dy++) {
-                        for (int dx = -1; dx <= 1; dx++) {
-                            if (lv.tile[lv.idx(x + dx, y + dy)] == Level.FLOOR) open9++;
-                        }
-                    }
+                    int deg = 0;
+                    boolean nearDoor = false;
                     for (int k = 0; k < 4; k++) {
                         int nx = x + (k == 0 ? 1 : (k == 1 ? -1 : 0));
                         int ny = y + (k == 2 ? 1 : (k == 3 ? -1 : 0));
-                        if (lv.tile[lv.idx(nx, ny)] == Level.FLOOR) deg++;
+                        if (!lv.isBlocking(nx, ny)) deg++;
                     }
-                    if (open9 >= 5) wide++;   // двуклеточный проход, а не щель
-                    if (deg >= 3) side++;     // есть клетка для шага вбок
-                }
-            }
-            for (int y = 1; y < lv.h - 2; y++) {
-                for (int x = 1; x < lv.w - 2; x++) {
-                    boolean all = true;
-                    for (int dy = 0; dy < 3 && all; dy++)
-                        for (int dx = 0; dx < 3; dx++)
-                            if (lv.tile[lv.idx(x + dx, y + dy)] != Level.FLOOR) {
-                                all = false; break;
+                    if (deg <= 2) narrow++;   // одноклеточный коридор
+                    for (int dy = -2; dy <= 2 && !nearDoor; dy++) {
+                        for (int dx = -2; dx <= 2; dx++) {
+                            int xx = x + dx, yy = y + dy;
+                            if (xx < 0 || yy < 0 || xx >= lv.w || yy >= lv.h) continue;
+                            int u = lv.tile[lv.idx(xx, yy)] & 0xff;
+                            if (u == Level.DOOR || u == Level.DOOR_OPEN) {
+                                nearDoor = true; break;
                             }
-                    if (all) blocks3x3++;
+                        }
+                    }
+                    if (nearDoor && deg >= 3) roomCells++;
                 }
             }
-            double monN = 0;
-            for (int i = 0; i < lv.monsterCount; i++) {
-                Monster m = lv.monsters[i];
-                for (int k = 0; k < 4; k++) {
-                    int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
-                    int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
-                    if (!lv.isWall(nx, ny)) monN++;
-                }
-            }
-            monN /= lv.monsterCount;
-            double wideR = floors == 0 ? 0 : (double) wide / floors;
-            double sideR = floors == 0 ? 0 : (double) side / floors;
+            double nr = floors == 0 ? 0 : (double) narrow / floors;
             double wallR = (double) walls / ((lv.w - 2) * (lv.h - 2));
-            if (wideR < worstWide) worstWide = wideR;
-            if (sideR < worstSide) worstSide = sideR;
+            if (nr < worstNarrow) worstNarrow = nr;
             if (wallR < fewestWalls) fewestWalls = wallR;
-            if (monN < worstMonN) worstMonN = monN;
-            if (blocks3x3 < fewestBlocks) fewestBlocks = blocks3x3;
-            if (blocks3x3 > mostBlocks) mostBlocks = blocks3x3;
-            check(wideR >= 0.80, "level " + n + ": only " +
-                    (int) (wideR * 100) + "% wide corridor cells");
-            check(sideR >= 0.78, "level " + n + ": only " +
-                    (int) (sideR * 100) + "% cells with a side step");
-            check(blocks3x3 >= 6, "level " + n + ": no hall for flanking");
-            check(blocks3x3 <= 80, "level " + n + ": " + blocks3x3 +
-                    " 3x3 halls, level is an open field");
-            check(wallR >= 0.18, "level " + n + ": only " +
-                    (int) (wallR * 100) + "% walls");
-            check(monN >= 2.0, "level " + n + ": monsters average " + monN +
-                    " free neighbours, no room to maneuver");
-            check(unreachable == 0, "level " + n + ": wide layout is disconnected");
+            if (doors < fewestDoors) fewestDoors = doors;
+            if (doors > mostDoors) mostDoors = doors;
+            if (roomCells < fewestRoomCells) fewestRoomCells = roomCells;
+            check(nr >= 0.80, "level " + n + ": only " +
+                    (int) (nr * 100) + "% one-tile corridor cells");
+            check(doors >= 3, "level " + n + ": only " + doors + " apartment doors");
+            check(doorsOk == doors, "level " + n + ": " +
+                    (doors - doorsOk) + " doors do not join corridor and room");
+            check(roomCells >= doors * 2, "level " + n + ": apartment rooms are missing");
+            check(wallR >= 0.50, "level " + n + ": only " +
+                    (int) (wallR * 100) + "% walls, corridors merged");
+            check(unreachable == 0, "level " + n + ": disconnected floor cells");
         }
-        System.out.println("  corridors: ok, min " + (int) (worstWide * 100) +
-                "% wide cells, " + (int) (worstSide * 100) +
-                "% side-step cells, " + fewestBlocks + ".." + mostBlocks +
-                " halls, min " + (int) (fewestWalls * 100) + "% walls, min " +
-                worstMonN + " free neighbours per monster");
+        System.out.println("  corridors: ok, min " + (int) (worstNarrow * 100) +
+                "% one-tile cells, " + fewestDoors + ".." + mostDoors +
+                " apartment doors, min " + fewestRoomCells + " room cells, min " +
+                (int) (fewestWalls * 100) + "% walls");
     }
 
     /** Экран карты продвижения: 45 узлов из ROM, 13 колонок, 4 концовки. */
