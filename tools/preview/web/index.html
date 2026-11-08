@@ -65,15 +65,17 @@
         <tr><td>меню: значение / назад</td><td><span class="key">4</span><span class="key">6</span><span class="key">1</span><span class="key">3</span> / <span class="key">9</span></td></tr>
         <tr><td><b>7 достать оружие → прицел</b></td><td><span class="key">7</span> / <span class="key">G</span></td></tr>
         <tr><td>ходьба: шаг / поворот 90°</td><td><span class="key">2</span><span class="key">8</span> / <span class="key">4</span><span class="key">6</span></td></tr>
+        <tr><td><b>стрейф влево / вправо</b></td><td><span class="key">1</span> / <span class="key">3</span></td></tr>
         <tr><td>в прицеле: 2/4/6/8</td><td><span class="key">↑</span><span class="key">←</span><span class="key">↓</span><span class="key">→</span></td></tr>
         <tr><td>огонь / перезарядка</td><td><span class="key">5</span><span class="key">Space</span> / <span class="key">0</span><span class="key">R</span></td></tr>
         <tr><td>очки Virtual Boy / карта</td><td><span class="key">*</span><span class="key">V</span> / <span class="key">#</span><span class="key">M</span></td></tr>
         <tr><td><b>меню паузы (прав. софт)</b></td><td><span class="key">P</span><span class="key">F2</span> / кнопка ниже</td></tr>
         <tr><td>карта продвижения (превью)</td><td><span class="key">N</span> / кнопка ниже</td></tr>
       </table>
-      <div class="note">Без оружия 2/8 — шаг на клетку, 4/6 — поворот на 90°.
-        С оружием те же кнопки двигают прицел, 5 стреляет. В меню 2/8
-        «перелистывают» пункты классическим курсором.</div>
+      <div class="note">Без оружия 2/8 — шаг на клетку, 4/6 — поворот на 90°,
+        1/3 — стрейф. Логика шагает сразу, а камера доезжает за 230 мс
+        (плавно, как доворот). С оружием 2/4/6/8 двигают прицел, 1/3 всё ещё
+        стрейфят, 5 стреляет. В меню 1/3 меняют значение пункта.</div>
       <div class="pad">
         <button class="empty"></button><button data-k="50">2 ▲</button><button class="empty"></button>
         <button data-k="52">4 ◄</button><button data-k="53">5</button><button data-k="54">6 ►</button>
@@ -85,7 +87,7 @@
       </div>
       <div class="row">
         <button data-k="42">* VB</button><button data-k="35"># КАРТА</button>
-        <button data-k="49">1</button><button data-k="51">3</button><button data-k="57">9</button>
+        <button data-k="49">1 ◄ СТРЕЙФ</button><button data-k="51">3 ► СТРЕЙФ</button><button data-k="57">9</button>
       </div>
       <div class="row">
         <button class="hot" data-k="-7">ПРАВ. СОФТ — ПАУЗА</button>
@@ -105,6 +107,13 @@
       <div class="badge">MIDI музыка + SFX</div>
       <div class="badge">RMS автосейв</div>
       <div class="badge">красный режим VB</div>
+      <div class="badge">открытые PNG-ресурсы</div>
+      <div class="badge">стрейф 1/3</div>
+      <div class="note"><b>Вся графика — обычные PNG внутри JAR.</b> Распакуйте
+        <b>dist/GigaKhrushchyovka.jar</b>, отредактируйте <b>gfx/weapon.png</b>,
+        <b>textures/beton.png</b> или <b>gfx/theme.txt</b> и выполните
+        <b>python3 tools/repack.py</b> — перекомпиляция не нужна. Манифест:
+        <b>RESOURCES.md</b>.</div>
       <div class="note">Движок: Mecasting (Роман Лагин) + LLM-J2ME-SUITE.
         Сборка JAR: <b>./build.sh</b>. В превью играет скомпилированный
         <b>samosbor.Game</b> на заглушках MIDP/MMAPI/RMS, а не JS-порт.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Генерирует src/samosbor/BitmapFont.java — встроенный шрифт 5x7 (Кириллица + Latin)."""
+"""Обновляет константы GLYPHS/DATA в BitmapFont.java (шрифт 5x7, Кириллица + Latin)."""
 import os
 
 G = {}
@@ -161,84 +161,28 @@ if cur:
 glyphs = uesc(ORDER)
 font_parts = ['\n        "' + p + '"' for p in parts]
 
-java = '''package samosbor;
-
-/**
- * Встроенный растровый шрифт 5x7: кириллица, латиница, цифры, знаки и пиктограммы.
- * Сгенерирован tools/gen_font.py — не зависит от системного шрифта телефона.
- * ^ = сердце, & = патрон, @ = стрелка, ~ = ключ, $ = номер.
- */
-public final class BitmapFont {
-
-    public static final int GLYPH_W = 5;
-    public static final int GLYPH_H = 7;
-
-    private static final String GLYPHS = "%s";
-
-    private static final String DATA =
-%s;
-
-    private BitmapFont() {}
-
-    /** Ширина строки в пикселях при масштабе scale. */
-    public static int width(String s, int scale) {
-        return s.length() * 6 * scale;
-    }
-
-    public static char upper(char c) {
-        if (c >= 'a' && c <= 'z') return (char) (c - 32);
-        if (c >= '\\u0430' && c <= '\\u044f') return (char) (c - 32);
-        if (c == '\\u0451') return '\\u0401';
-        return c;
-    }
-
-    /** Рисует строку в кадровый буфер. Цвет — ARGB (0xffRRGGBB). */
-    public static void draw(int[] buf, int sw, int sh, String s,
-                            int x, int y, int color, int scale) {
-        int cx = x;
-        for (int i = 0; i < s.length(); i++) {
-            char ch = upper(s.charAt(i));
-            if (ch != ' ') {
-                int idx = GLYPHS.indexOf(ch);
-                if (idx < 0) idx = GLYPHS.indexOf('?');
-                int base = idx * 7;
-                for (int r = 0; r < 7; r++) {
-                    int bits = DATA.charAt(base + r) - 0x100;
-                    for (int c = 0; c < 5; c++) {
-                        if ((bits & (1 << (4 - c))) == 0) continue;
-                        int px = cx + c * scale;
-                        int py = y + r * scale;
-                        for (int sy = 0; sy < scale; sy++) {
-                            int yy = py + sy;
-                            if (yy < 0 || yy >= sh) continue;
-                            int off = yy * sw;
-                            for (int sx = 0; sx < scale; sx++) {
-                                int xx = px + sx;
-                                if (xx >= 0 && xx < sw) buf[off + xx] = color;
-                            }
-                        }
-                    }
-                }
-            }
-            cx += 6 * scale;
-            if (cx >= sw) break;
-        }
-    }
-
-    /** Рисует строку с тёмным контуром (для читаемости поверх 3D). */
-    public static void drawShadow(int[] buf, int sw, int sh, String s,
-                                  int x, int y, int color, int scale) {
-        draw(buf, sw, sh, s, x - 1, y, 0xff000000, scale);
-        draw(buf, sw, sh, s, x + 1, y, 0xff000000, scale);
-        draw(buf, sw, sh, s, x, y - 1, 0xff000000, scale);
-        draw(buf, sw, sh, s, x, y + 1, 0xff000000, scale);
-        draw(buf, sw, sh, s, x, y, color, scale);
-    }
-}
-''' % (glyphs, ' +\n'.join(font_parts))
+# ВАЖНО: BitmapFont.java теперь содержит не только сгенерированную таблицу,
+# но и написанный вручную загрузчик открытого атласа gfx/font.png. Поэтому
+# генератор НЕ перезаписывает файл целиком, а точечно обновляет две константы —
+# GLYPHS и DATA. Ручной код (пиксели, atlas, silent, drawShadow) сохраняется.
+import re
 
 path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     'src', 'samosbor', 'BitmapFont.java')
+with open(path, 'r', encoding='utf-8') as f:
+    src = f.read()
+
+glyph_line = '    private static final String GLYPHS = "%s";\n' % glyphs
+src, n1 = re.subn(r'    private static final String GLYPHS = ".*?";\n',
+                   lambda m: glyph_line, src, count=1, flags=re.S)
+assert n1 == 1, 'GLYPHS declaration not found in BitmapFont.java'
+
+data_block = ('    private static final String DATA =\n' +
+              ' +\n'.join(font_parts) + ';\n')
+src, n2 = re.subn(r'    private static final String DATA =.*?;\n',
+                   lambda m: data_block, src, count=1, flags=re.S)
+assert n2 == 1, 'DATA declaration not found in BitmapFont.java'
+
 with open(path, 'w', encoding='utf-8') as f:
-    f.write(java)
-print('wrote', path, 'glyphs:', len(ORDER), 'data chars:', len(data))
+    f.write(src)
+print('patched', path, 'glyphs:', len(ORDER), 'data chars:', len(data))

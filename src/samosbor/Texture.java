@@ -40,6 +40,16 @@ public final class Texture {
     }
 
     public static Texture load(String path) {
+        Texture t = loadOptional(path);
+        return t != null ? t : solid(0xff3a2048);
+    }
+
+    /**
+     * То же, но без заглушки: null, если PNG в JAR нет или он битый.
+     * Нужно для открытых ресурсов — отсутствующий файл означает
+     * «рисуй процедурно», а не «залей всё фиолетовым».
+     */
+    public static Texture loadOptional(String path) {
         try {
             Image img = Image.createImage(path);
             int iw = img.getWidth();
@@ -48,8 +58,29 @@ public final class Texture {
             img.getRGB(pixels, 0, iw, 0, 0, iw, ih);
             img = null;
             return new Texture(pixels, iw, ih);
-        } catch (Exception e) {
-            return solid(0xff3a2048);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Только пиксели PNG без объекта Texture и без второго массива vb.
+     * Нужно для больших полноэкранных пластин: на CLDC 1.1 лишние
+     * 240x320 int[] стоят ~300 КБ кучи. dim[0]=ширина, dim[1]=высота.
+     */
+    public static int[] loadPixels(String path, int[] dim) {
+        try {
+            Image img = Image.createImage(path);
+            int iw = img.getWidth();
+            int ih = img.getHeight();
+            int[] pixels = new int[iw * ih];
+            img.getRGB(pixels, 0, iw, 0, 0, iw, ih);
+            dim[0] = iw;
+            dim[1] = ih;
+            img = null;
+            return pixels;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

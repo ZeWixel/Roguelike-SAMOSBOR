@@ -52,6 +52,15 @@ public final class Raster {
         }
     }
 
+    /** Спрайт из обычного PNG в JAR (ARGB, alpha = 0 => прозрачно). */
+    public static Raster fromTexture(Texture t) {
+        if (t == null) return null;
+        Raster g = new Raster(t.w, t.h);
+        for (int i = 0; i < g.p.length; i++) g.p[i] = t.rgb[i];
+        g.buildVb();
+        return g;
+    }
+
     public static int rgb(int r, int g, int b) {
         if (r < 0) r = 0; else if (r > 255) r = 255;
         if (g < 0) g = 0; else if (g > 255) g = 255;

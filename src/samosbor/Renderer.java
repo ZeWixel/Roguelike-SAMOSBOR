@@ -11,8 +11,9 @@ public final class Renderer {
     private static final int FP = Fx.FP;       // масштаб: 4096 = одна клетка
     private static final int SHIFT = Fx.fp;    // сдвиг для fixed point: 12 бит
     private static final int FPSQR = Fx.FPSQR;
-    private static final int FOG_NORMAL = 0xff2a1036;
-    private static final int FOG_VB = 0xff200000;
+    // Цвета тумана тоже берутся из открытого gfx/theme.txt.
+    private static final int FOG_NORMAL = Gfx.color("FOG_NORMAL", 0xff2a1036);
+    private static final int FOG_VB = Gfx.color("FOG_VB", 0xff200000);
 
     public final int sw, sh, fullH;
     public final int[] screen;
@@ -57,7 +58,10 @@ public final class Renderer {
         }
 
         for (int t = 1; t < itemSprite.length; t++) {
-            itemSprite[t] = makeItemSprite(t);
+            // Приоритет у gfx/item-N.png из JAR; процедурный спрайт — фолбэк.
+            Raster fromJar = Gfx.item(t);
+            itemSprite[t] = (fromJar != null && fromJar.w == 24 && fromJar.h == 24)
+                    ? fromJar : makeItemSprite(t);
             itemSprite[t].buildVb();
         }
     }

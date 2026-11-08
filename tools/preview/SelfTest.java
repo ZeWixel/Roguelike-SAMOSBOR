@@ -34,6 +34,8 @@ public final class SelfTest {
         testCorridors();
         testProgressChart();
         testSmoothTurn();
+        testStrafeAndSmoothSteps();
+        testOpenResources();
         testFullRun();
         System.out.println("SelfTest: " + checks + " checks, " + failures + " failures");
         if (failures > 0) System.exit(1);
@@ -900,6 +902,212 @@ public final class SelfTest {
         int[] out = new int[cnt];
         for (int i = 0; i < cnt; i++) out[i] = rev[cnt - 1 - i];
         return out;
+    }
+
+    /** 1/3 = стрейф без поворота; шаг едет плавно и замирает на паузе. */
+    private static void testStrafeAndSmoothSteps() throws Exception {
+        BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
+        Graphics gfx = new Graphics(img);
+        Game g = new Game(null);
+        Field fLevel = field(Game.class, "level");
+        Field fTX = field(Game.class, "playerTX");
+        Field fTY = field(Game.class, "playerTY");
+        Field fPosX = field(Game.class, "posX");
+        Field fPosY = field(Game.class, "posY");
+        Field fStepStart = field(Game.class, "stepStart");
+        Field fStepEnd = field(Game.class, "stepEnd");
+        Field fState = field(Game.class, "state");
+        Method setVectors = method(Game.class, "setVectors", new Class[0]);
+        Method snapStep = method(Game.class, "snapStep", new Class[0]);
+        Method advanceStep = method(Game.class, "advanceStep",
+                new Class[] {long.class});
+        Method norm = method(Game.class, "norm", new Class[] {int.class});
+        Method stepEase = method(Game.class, "stepEase", new Class[] {int.class});
+
+        check(((Integer) norm.invoke(g, new Object[] {new Integer(49)})).intValue() == 9,
+                "key 1 maps to the strafe-left action");
+        check(((Integer) norm.invoke(g, new Object[] {new Integer(51)})).intValue() == 10,
+                "key 3 maps to the strafe-right action");
+        int e0 = ((Integer) stepEase.invoke(null,
+                new Object[] {new Integer(0)})).intValue();
+        int eMid = ((Integer) stepEase.invoke(null,
+                new Object[] {new Integer(128)})).intValue();
+        int e1 = ((Integer) stepEase.invoke(null,
+                new Object[] {new Integer(256)})).intValue();
+        check(e0 == 0 && e1 == 256, "step easing is clamped to 0..256");
+        check(eMid > 96 && eMid < 160, "step easing is half way at half time (" + eMid + ")");
+
+        tap(g, 53); tap(g, 53);                  // НОВЫЙ ЗАБЕГ -> PLAY
+        Level lv = (Level) fLevel.get(g);
+        for (int i = 0; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
+        field(Game.class, "dirDeg").setInt(g, 0);
+        setVectors.invoke(g, new Object[0]);    // смотрим на -X: вбок = +/-Y
+
+        // Клетка, куда можно шагнуть и влево, и вправо, и вперёд.
+        int bx = -1, by = -1;
+        for (int y = 1; y < lv.h - 1 && bx < 0; y++) {
+            for (int x = 1; x < lv.w - 1; x++) {
+                if (lv.tile[lv.idx(x, y)] != Level.FLOOR) continue;
+                if (lv.tile[lv.idx(x, y - 1)] != Level.FLOOR) continue;
+                if (lv.tile[lv.idx(x, y + 1)] != Level.FLOOR) continue;
+                if (lv.tile[lv.idx(x - 1, y)] != Level.FLOOR) continue;
+                bx = x; by = y; break;
+            }
+        }
+        check(bx > 0, "found a test tile with free left/right/forward cells");
+
+        fTX.setInt(g, bx); fTY.setInt(g, by);
+        snapStep.invoke(g, new Object[0]);
+        int px0 = fPosX.getInt(g), py0 = fPosY.getInt(g);
+        check(px0 == bx * Fx.FP + Fx.FP / 2 && py0 == by * Fx.FP + Fx.FP / 2,
+                "camera starts exactly in the logical tile");
+
+        tap(g, 49);                              // 1 = стрейф влево
+        check(fTX.getInt(g) == bx && fTY.getInt(g) == by + 1,
+                "strafe left moves one cell sideways without turning");
+        check(field(Game.class, "dirDeg").getInt(g) == 0,
+                "strafe does not change the heading");
+        check(fPosX.getInt(g) == px0 && fPosY.getInt(g) == py0,
+                "camera has not teleported at the start of the step");
+        long t0 = fStepStart.getLong(g);
+        check(fStepEnd.getLong(g) - t0 == 230, "step glide lasts STEP_MS");
+
+        advanceStep.invoke(g, new Object[] {new Long(t0 + 115)});
+        int mid = fPosY.getInt(g);
+        check(mid > py0 && mid < py0 + Fx.FP,
+                "camera is between tiles in the middle of the step (" + mid + ")");
+        check(mid - py0 > 1400 && mid - py0 < 2700,
+                "step uses ease-in-out, not a linear jump");
+        advanceStep.invoke(g, new Object[] {new Long(t0 + 231)});
+        check(fPosY.getInt(g) == py0 + Fx.FP,
+                "camera settles exactly one tile away");
+        check(fStepEnd.getLong(g) == fStepStart.getLong(g),
+                "finished step is deactivated");
+
+        tap(g, 51);                              // 3 = стрейф вправо
+        check(fTX.getInt(g) == bx && fTY.getInt(g) == by,
+                "strafe right returns to the original tile");
+        long t1 = fStepStart.getLong(g);
+        advanceStep.invoke(g, new Object[] {new Long(t1 + 231)});
+        check(fPosY.getInt(g) == py0, "camera settles back home");
+
+        tap(g, 50);                              // 2 = обычный шаг вперёд
+        check(fTX.getInt(g) == bx - 1 && fTY.getInt(g) == by,
+                "forward step still follows the heading");
+        check(fPosX.getInt(g) == px0,
+                "forward step starts from the old tile, without a teleport");
+        long t2 = fStepStart.getLong(g);
+        advanceStep.invoke(g, new Object[] {new Long(t2 + 115)});
+        check(fPosX.getInt(g) < px0 && fPosX.getInt(g) > px0 - Fx.FP,
+                "forward step is interpolated too");
+        advanceStep.invoke(g, new Object[] {new Long(t2 + 231)});
+        check(fPosX.getInt(g) == px0 - Fx.FP,
+                "forward camera settles exactly one tile ahead");
+
+        // Мир замирает на паузе: таймеры анимаций сдвигаются, длительность не меняется.
+        fState.setInt(g, 6);                     // PAUSE
+        long frozen = 1000L;
+        fStepStart.setLong(g, frozen);
+        fStepEnd.setLong(g, frozen + 230);
+        g.paint(gfx);
+        Thread.sleep(25);
+        g.paint(gfx);
+        check(fStepStart.getLong(g) > frozen, "step timer is shifted while paused");
+        check(fStepEnd.getLong(g) - fStepStart.getLong(g) == 230,
+                "pause does not shorten the step glide");
+        check(fPosX.getInt(g) == px0 - Fx.FP,
+                "pause does not move the camera");
+        System.out.println("  strafe + smooth steps: ok");
+    }
+
+    /** Вся графика лежит в JAR обычными файлами и читается без пересборки. */
+    private static void testOpenResources() throws Exception {
+        check(Gfx.weapon() != null && Gfx.weapon().w == 64
+                && Gfx.weapon().h == 54, "gfx/weapon.png loads as a Raster");
+        for (int t = 1; t <= 6; t++) {
+            Raster r = Gfx.item(t);
+            check(r != null && r.w == 24 && r.h == 24,
+                    "gfx/item-" + t + ".png loads as a 24x24 sprite");
+        }
+        for (int i = 0; i < 3; i++) {
+            Raster r = Gfx.titleMonster(i);
+            check(r != null && r.w == 40 && r.h == 56,
+                    "gfx/title-" + i + ".png loads as a 40x56 sprite");
+        }
+        check(Gfx.hud() != null && Gfx.hud().w == 240,
+                "gfx/hud.png loads as the HUD plate");
+        check(Gfx.crosshair(false) != null && Gfx.crosshair(true) != null,
+                "both crosshair masks load");
+        check(Gfx.hasPlate(0) && Gfx.hasPlate(1) && Gfx.hasPlate(2)
+                && Gfx.hasPlate(4) && Gfx.hasPlate(5) && Gfx.hasPlate(7),
+                "full-screen background plates are resources");
+        check(Gfx.color("PURPLE", 0) == 0xffb952c7,
+                "palette is read from gfx/theme.txt");
+        check(Gfx.color("EXAMPLE_RGB", 0) == 0xff123456,
+                "six-digit palette value gets an opaque alpha");
+        check(Gfx.color("NO_SUCH_KEY", 0x12345678) == 0x12345678,
+                "unknown palette key falls back to the built-in value");
+
+        // Атлас шрифта должен давать ровно тот же текст, что встроенная таблица.
+        check(BitmapFont.hasAtlas(), "gfx/font.png loads as the font atlas");
+        String sample = "ГИГАХРУЩЁВКА 1/3 СТРЕЙФ 2026";
+        int[] withAtlas = new int[240 * 40];
+        int[] builtIn = new int[240 * 40];
+        BitmapFont.draw(withAtlas, 240, 40, sample, 2, 4, 0xfff0e6d0, 1);
+        Field fChecked = field(BitmapFont.class, "atlasChecked");
+        Field fAtlas = field(BitmapFont.class, "atlas");
+        fChecked.setBoolean(null, true);
+        fAtlas.set(null, null);
+        BitmapFont.draw(builtIn, 240, 40, sample, 2, 4, 0xfff0e6d0, 1);
+        boolean same = true;
+        for (int i = 0; i < withAtlas.length; i++) {
+            if (withAtlas[i] != builtIn[i]) { same = false; break; }
+        }
+        check(same, "font atlas renders identically to the built-in glyph table");
+        fChecked.setBoolean(null, false);
+        BitmapFont.hasAtlas();   // вернуть атлас для остальных тестов/превью
+
+        // Прозрачный слой поверх кадра ничего не портит.
+        int[] buf = new int[240 * 320];
+        for (int i = 0; i < buf.length; i++) buf[i] = 0xff123456;
+        Gfx.drawOverlay(buf, 240, 320);
+        boolean intact = true;
+        for (int i = 0; i < buf.length; i++) {
+            if (buf[i] != 0xff123456) { intact = false; break; }
+        }
+        check(intact, "default gfx/overlay.png is fully transparent");
+
+        // И наконец — всё это действительно попадает в JAR.
+        java.io.File jar = new java.io.File("dist/GigaKhrushchyovka.jar");
+        check(jar.isFile(), "dist/GigaKhrushchyovka.jar exists");
+        if (jar.isFile()) {
+            java.util.zip.ZipFile z = new java.util.zip.ZipFile(jar);
+            String[] must = {
+                "textures/beton.png", "audio/theme.mid",
+                "gfx/weapon.png", "gfx/item-1.png", "gfx/item-6.png",
+                "gfx/font.png", "gfx/hud.png", "gfx/crosshair.png",
+                "gfx/overlay.png", "gfx/screen-title.png", "gfx/theme.txt",
+                "gfx/README.txt", "gfx/source/base_beast.png"
+            };
+            for (int i = 0; i < must.length; i++) {
+                check(z.getEntry(must[i]) != null, "JAR contains " + must[i]);
+            }
+            int png = 0, mid = 0, txt = 0;
+            java.util.Enumeration en = z.entries();
+            while (en.hasMoreElements()) {
+                java.util.zip.ZipEntry e =
+                        (java.util.zip.ZipEntry) en.nextElement();
+                String n = e.getName();
+                if (n.endsWith(".png")) png++;
+                else if (n.endsWith(".mid")) mid++;
+                else if (n.endsWith(".txt")) txt++;
+            }
+            z.close();
+            check(png >= 55, "JAR ships all graphics as PNG (" + png + ")");
+            check(mid == 14, "JAR ships 14 MIDI files");
+            check(txt >= 2, "JAR ships the palette and the resource README");
+        }
+        System.out.println("  open resources: ok");
     }
 
     private static void tap(Game g, int code) {

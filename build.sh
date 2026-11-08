@@ -1,10 +1,24 @@
 #!/bin/sh
 # Сборка «Гигахрущёвки» для J2ME (CLDC 1.1 / MIDP 2.0, java 1.3).
 # Использует UEI и ProGuard из LLM-J2ME-SUITE (см. tools/README.md).
+#
+#   ./build.sh               — обычная сборка; НЕ перезаписывает графику в res/
+#   ./build.sh --regen-art   — заново сгенерировать PNG/MIDI/шрифт/атлас
+#
+# Все ресурсы открыты: они лежат в res/ и копируются в JAR как есть.
+# После ручной правки PNG достаточно python3 tools/repack.py — без javac.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$ROOT"
+
+REGEN=0
+for arg in "$@"; do
+    case "$arg" in
+        --regen-art) REGEN=1 ;;
+        *) echo "Неизвестный параметр: $arg" >&2; exit 2 ;;
+    esac
+done
 
 JDK8=${JDK8:-"$HOME/.cache/jdk8"}
 if [ ! -x "$JDK8/bin/javac" ]; then
@@ -30,12 +44,17 @@ PROGUARD="$ROOT/tools/proguard.jar"
 rm -rf "$BUILD/classes" "$BUILD/preverified" "$BUILD/preview" "$BUILD/screenshots"
 mkdir -p "$BUILD/classes" "$BUILD/preverified" "$BUILD/preview" "$BUILD/screenshots" "$DIST"
 
-echo "==> Текстуры (tools/gen_textures.py)"
-python3 tools/gen_textures.py >/dev/null
-echo "==> Шрифт (tools/gen_font.py)"
-python3 tools/gen_font.py >/dev/null
-echo "==> MIDI-музыка и эффекты (tools/gen_audio.py)"
-python3 tools/gen_audio.py >/dev/null
+# Генераторы нужны ТОЛЬКО при первом клоне или по явному --regen-art.
+# Иначе ручные правки res/*.png переживают любую пересборку.
+if [ "$REGEN" = 1 ] || [ ! -f src/samosbor/BitmapFont.java ] \
+        || [ ! -f res/textures/beton.png ] || [ ! -f res/audio/menu.mid ]; then
+    echo "==> Генераторы исходных ресурсов (первый запуск / --regen-art)"
+    python3 tools/gen_textures.py >/dev/null
+    python3 tools/gen_font.py >/dev/null
+    python3 tools/gen_audio.py >/dev/null
+else
+    echo "==> Ресурсы из res/ не трогаем (правки сохраняются)"
+fi
 
 echo "==> javac -source 1.3 -target 1.3"
 find src -name '*.java' | sort > "$BUILD/sources.txt"
@@ -65,10 +84,34 @@ else
     echo "    StackMap: ok"
 fi
 
+echo "==> Превью-классы (MIDP/MMAPI/RMS-заглушки)"
+"$JAVAC" -source 8 -target 8 -encoding UTF-8 -Xlint:-options \
+    -d "$BUILD/preview" \
+    $(find tools/preview/stub -name '*.java' | sort) \
+    $(find src -name '*.java' | sort) \
+    tools/preview/Preview.java tools/preview/SelfTest.java \
+    tools/preview/ExportGfx.java
+
+# Экспорт процедурных спрайтов в PNG делается один раз; дальше PNG — источник.
+if [ "$REGEN" = 1 ] || [ ! -f res/gfx/weapon.png ] || [ ! -f res/gfx/theme.txt ]; then
+    echo "==> Экспорт всей графики в res/gfx/ (открытые ресурсы)"
+    "$JAVA" -cp "$BUILD/preview:$ROOT/res" samosbor.ExportGfx "$ROOT/res/gfx"
+else
+    echo "==> res/gfx/ уже есть, используем отредактированные PNG"
+fi
+
 echo "==> Ресурсы"
-mkdir -p "$BUILD/preverified/textures" "$BUILD/preverified/audio"
+mkdir -p "$BUILD/preverified/textures" "$BUILD/preverified/audio" \
+         "$BUILD/preverified/gfx/source"
 cp res/textures/*.png "$BUILD/preverified/textures/"
 cp res/audio/*.mid "$BUILD/preverified/audio/"
+# Только файлы, не каталоги: PNG/MIDI/TXT лежат в gfx/ и gfx/source/.
+find res/gfx -type f ! -name '*.tmp' -print | while read -r f; do
+    rel=${f#res/gfx/}
+    mkdir -p "$BUILD/preverified/gfx/$(dirname "$rel")"
+    cp "$f" "$BUILD/preverified/gfx/$rel"
+done
+# gfx/source/*.png — исходные фото-основы текстур, тоже лежат в JAR.
 
 cat > "$BUILD/MANIFEST.MF" <<'EOF'
 Manifest-Version: 1.0
@@ -76,7 +119,7 @@ Created-By: GigaKhrushchyovka build.sh (J2ME)
 MIDlet-1: GigaKhrushchyovka,,samosbor.Main
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.5.0
+MIDlet-Version: 1.6.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
@@ -93,18 +136,13 @@ MIDlet-Jar-Size: $SIZE
 MIDlet-Jar-URL: GigaKhrushchyovka.jar
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.5.0
+MIDlet-Version: 1.6.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
 EOF
 
-echo "==> Превью и самотест (тот же Java-код на MIDP/MMAPI/RMS-заглушках)"
-"$JAVAC" -source 8 -target 8 -encoding UTF-8 -Xlint:-options \
-    -d "$BUILD/preview" \
-    $(find tools/preview/stub -name '*.java' | sort) \
-    $(find src -name '*.java' | sort) \
-    tools/preview/Preview.java tools/preview/SelfTest.java
+echo "==> Самотест и кадры превью (тот же Java-код на заглушках)"
 "$JAVA" -cp "$BUILD/preview:$ROOT/res" samosbor.SelfTest
 "$JAVA" -cp "$BUILD/preview:$ROOT/res" samosbor.Preview --capture "$BUILD/screenshots"
 
@@ -112,3 +150,4 @@ echo "==> Готово"
 ls -lh "$DIST/GigaKhrushchyovka.jar" "$DIST/GigaKhrushchyovka.jad"
 echo "    dist/GigaKhrushchyovka.jar  — ставить на телефон вместе с .jad"
 echo "    build/screenshots/          — кадры из превью"
+echo "    python3 tools/repack.py     — перепаковать JAR после правки PNG"

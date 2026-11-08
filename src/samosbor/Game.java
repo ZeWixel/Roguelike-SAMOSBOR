@@ -32,6 +32,7 @@ public final class Game extends Canvas {
 
     private static final int A_UP = 0, A_DOWN = 1, A_LEFT = 2, A_RIGHT = 3,
             A_FIRE = 4, A_AIM = 5, A_MAP = 6, A_VB = 7, A_RELOAD = 8,
+            // В меню 1/3 меняют значение, в бою это стрейф влево/вправо.
             A_OPT_L = 9, A_OPT_R = 10, A_BACK = 11, A_PAUSE = 12, A_COUNT = 13;
 
     private static final int SAVE_MAGIC = 0x47485332; // "GHS2"
@@ -43,11 +44,21 @@ public final class Game extends Canvas {
     // доворачивается за TURN_MS с ease-in-out (smoothstep) и дробным углом.
     private static final int TURN_MS = 230;
     private static final int TURN_QUARTER = 90 * Fx.SUB;
+    // Шаг на клетку больше не телепорт: логика переключает клетку сразу,
+    // а позиция камеры проезжает одну клетку за STEP_MS с тем же smoothstep.
+    // Длительность равна паузе между шагами, поэтому удержание даёт
+    // непрерывное движение без остановок и без накопления отставания.
+    private static final int STEP_MS = 230;
 
-    private static final int C_WHITE = 0xfff0e6d0, C_RED = 0xffe05050,
-            C_PURPLE = 0xffb952c7, C_YELLOW = 0xffd8cf40,
-            C_GREEN = 0xff8ec06a, C_DARK = 0xff180e20,
-            C_GREY = 0xff8d8e8e;
+    // Палитра читается из открытого текстового ресурса gfx/theme.txt.
+    // Значения справа — встроенные значения по умолчанию (фолбэк).
+    private static int C_WHITE = Gfx.color("WHITE", 0xfff0e6d0),
+            C_RED = Gfx.color("RED", 0xffe05050),
+            C_PURPLE = Gfx.color("PURPLE", 0xffb952c7),
+            C_YELLOW = Gfx.color("YELLOW", 0xffd8cf40),
+            C_GREEN = Gfx.color("GREEN", 0xff8ec06a),
+            C_DARK = Gfx.color("DARK", 0xff180e20),
+            C_GREY = Gfx.color("GREY", 0xff8d8e8e);
 
     private static final String[] MENU = {
         "НОВЫЙ ЗАБЕГ", "ПРОДОЛЖИТЬ", "УПРАВЛЕНИЕ", "МУЗЫКА: ВКЛ", "ВЫХОД"
@@ -76,9 +87,15 @@ public final class Game extends Canvas {
     private static final String[] ENDING_LABEL = {
         "ENDING A", "ENDING B", "ENDING C", "ENDING D"
     };
-    private static final int C_RED_DIM = 0xff741a24;
-    private static final int C_RED_MID = 0xffb02a34;
-    private static final int C_BLACK = 0xff080406;
+    private static int C_RED_DIM = Gfx.color("RED_DIM", 0xff741a24);
+    private static int C_RED_MID = Gfx.color("RED_MID", 0xffb02a34);
+    private static int C_BLACK = Gfx.color("BLACK", 0xff080406);
+    private static int C_PANEL = Gfx.color("PANEL_BG", 0xff140b1c);
+    private static int C_BG = Gfx.color("BG", 0xff0d0812);
+    private static int C_SCREEN_BG = Gfx.color("SCREEN_BG", 0xff120a1a);
+    private static int C_MAP_BG = Gfx.color("MAP_BG", 0xff0b0610);
+    private static int C_CROSSHAIR = Gfx.color("CROSSHAIR", 0xffe05050);
+    private static int C_CROSSHAIR_HOT = Gfx.color("CROSSHAIR_HOT", 0xffd8cf40);
 
     private final Main midlet;
     private int w, h, viewH, hudH;
@@ -108,6 +125,8 @@ public final class Game extends Canvas {
 
     /** Фиксированный seed для воспроизводимых кадров превью; в игре 0. */
     static int demoSeed = 0;
+    /** Только для экспорта фонов в tools/preview/ExportGfx.java. */
+    public static boolean bgOnly = false;
 
     private int runSeed, stage, floorNumber, deaths, fastFloors, totalTimeLeft,
             minFloor, ending;
@@ -124,6 +143,9 @@ public final class Game extends Canvas {
     private int camAngle, camFrom, camTarget, camDirX, camDirY,
             camPlaneX, camPlaneY;
     private long turnStart, turnEnd;
+    // Интерполяция шага: откуда/куда едет камера и на каком отрезке времени.
+    private int stepFromX, stepFromY, stepToX, stepToY;
+    private long stepStart, stepEnd;
     private int aimX, aimY;
     private int health, magazine, reserve;
     private boolean hasKey, hasWhite, hasBlack;
@@ -173,9 +195,13 @@ public final class Game extends Canvas {
 
         Rng r = new Rng(0x50A40C);
         for (int i = 0; i < titleMonsters.length; i++) {
-            titleMonsters[i] = Monster.create(r, i).frames[0];
+            Raster fromJar = Gfx.titleMonster(i);
+            titleMonsters[i] = fromJar != null ? fromJar
+                    : Monster.create(r, i).frames[0];
         }
-        weaponSprite = makeWeapon();
+        Raster weaponFromJar = Gfx.weapon();
+        weaponSprite = weaponFromJar != null ? weaponFromJar : makeWeapon();
+        weaponSprite.buildVb();
 
         try {
             audio = new Audio();
@@ -385,13 +411,18 @@ public final class Game extends Canvas {
                     showMap = !showMap;
                     play(Audio.MENU);
                     setMessage(showMap ? "КАРТА ЭТАЖА" : "", C_GREEN);
+                } else if (a == A_OPT_L || a == A_OPT_R) {
+                    // 1 / 3 — стрейф: шаг вбок без смены направления взгляда.
+                    // Работает и с оружием в руках, когда 2/4/6/8 водят прицел.
+                    navigate(a, now);
+                    nextNav = now + STEP_MS;
                 } else if (a == A_UP || a == A_DOWN || a == A_LEFT || a == A_RIGHT) {
                     if (!aiming) {
                         navigate(a, now);
                         // Поворот длится TURN_MS: удержание даёт непрерывное
                         // вращение без рывков и без накопления отставания.
                         boolean turn = (a == A_LEFT || a == A_RIGHT);
-                        nextNav = now + (turn ? TURN_MS : 230);
+                        nextNav = now + (turn ? TURN_MS : STEP_MS);
                     }
                 }
                 break;
@@ -545,7 +576,15 @@ public final class Game extends Canvas {
         if (dt < 0) dt = 0;
         if (dt > 200) dt = 200;
         lastFrame = now;
-        advanceCamera(now);          // плавный доворот идёт даже вне update()
+        // Пауза / карта / меню замораживают мир: сдвигаем таймеры анимаций
+        // вместе с кадром, чтобы доворот и шаг продолжились без рывка.
+        if (state != PLAY || showMap) {
+            if (stepEnd > stepStart) { stepStart += dt; stepEnd += dt; }
+            if (turnEnd > turnStart) { turnStart += dt; turnEnd += dt; }
+        } else {
+            advanceCamera(now);
+            advanceStep(now);
+        }
         if (state == PLAY) update(dt, now);
         renderFrame(now);
         g.drawRGB(renderer.screen, 0, w, 0, 0, w, h, false);
@@ -574,16 +613,21 @@ public final class Game extends Canvas {
                 if (aimY < 2) aimY = 2;
                 if (aimY > viewH - 3) aimY = viewH - 3;
             }
-        } else if (now >= nextNav) {
+        }
+        if (now >= nextNav) {
             int a = -1;
-            if (held[A_UP]) a = A_UP;
-            else if (held[A_DOWN]) a = A_DOWN;
-            else if (held[A_LEFT]) a = A_LEFT;
-            else if (held[A_RIGHT]) a = A_RIGHT;
+            if (held[A_OPT_L]) a = A_OPT_L;
+            else if (held[A_OPT_R]) a = A_OPT_R;
+            else if (!aiming) {
+                if (held[A_UP]) a = A_UP;
+                else if (held[A_DOWN]) a = A_DOWN;
+                else if (held[A_LEFT]) a = A_LEFT;
+                else if (held[A_RIGHT]) a = A_RIGHT;
+            }
             if (a >= 0) {
                 navigate(a, now);
                 boolean turn = (a == A_LEFT || a == A_RIGHT);
-                nextNav = now + (turn ? TURN_MS : 190);
+                nextNav = now + (turn ? TURN_MS : STEP_MS);
             }
         }
 
@@ -835,9 +879,20 @@ public final class Game extends Canvas {
         if (showMap) return;
         if (a == A_LEFT) { rotate(-90, now); return; }
         if (a == A_RIGHT) { rotate(90, now); return; }
-        int sign = (a == A_UP) ? 1 : -1;
-        int tx = playerTX + (dirX * sign >> 12);
-        int ty = playerTY + (dirY * sign >> 12);
+        int mx, my;
+        if (a == A_UP) {                       // вперёд по логическому курсу
+            mx = dirX >> 12; my = dirY >> 12;
+        } else if (a == A_DOWN) {              // назад, не разворачиваясь
+            mx = -(dirX >> 12); my = -(dirY >> 12);
+        } else if (a == A_OPT_L) {             // 1 — стрейф влево
+            mx = dirY >> 12; my = -(dirX >> 12);
+        } else if (a == A_OPT_R) {             // 3 — стрейф вправо
+            mx = -(dirY >> 12); my = dirX >> 12;
+        } else {
+            return;
+        }
+        int tx = playerTX + mx;
+        int ty = playerTY + my;
         if (!level.inside(tx, ty)) return;
         int cell = level.idx(tx, ty);
         byte t = level.tile[cell];
@@ -865,8 +920,7 @@ public final class Game extends Canvas {
         }
         playerTX = tx;
         playerTY = ty;
-        posX = tx * FP + FP / 2;
-        posY = ty * FP + FP / 2;
+        startStep(tx, ty, now);              // камера доедет за STEP_MS
         play(Audio.STEP);
         for (int yy = ty - 1; yy <= ty + 1; yy++) {
             for (int xx = tx - 1; xx <= tx + 1; xx++) level.markSeen(xx, yy);
@@ -1103,8 +1157,7 @@ public final class Game extends Canvas {
         level = new Level(runSeed, floorNumber, stage);
         playerTX = level.startX;
         playerTY = level.startY;
-        posX = playerTX * FP + FP / 2;
-        posY = playerTY * FP + FP / 2;
+        snapStep();                          // новый этаж: без недоеханного шага
         setVectors();
         level.computeDist(playerTX, playerTY);
         int bestD = -1, bestDeg = 0;
@@ -1145,6 +1198,50 @@ public final class Game extends Canvas {
         camTarget += (delta > 0 ? TURN_QUARTER : -TURN_QUARTER);
         turnStart = now;
         turnEnd = now + TURN_MS;
+    }
+
+    /**
+     * Начинает плавный проезд в клетку (tx,ty). Логические playerTX/TY уже
+     * переключены; posX/posY остаются в предыдущей точке и догоняют за STEP_MS.
+     * Если игрок шагнул, не доехав предыдущий шаг, стартуем от текущей
+     * визуальной позиции — движение остаётся непрерывным.
+     */
+    private void startStep(int tx, int ty, long now) {
+        stepFromX = posX;
+        stepFromY = posY;
+        stepToX = tx * FP + FP / 2;
+        stepToY = ty * FP + FP / 2;
+        stepStart = now;
+        stepEnd = now + STEP_MS;
+    }
+
+    /** Ease-in-out для шага: t в 0..256, результат в 0..256. */
+    private static int stepEase(int t) {
+        return t * t * (768 - 2 * t) / 65536;
+    }
+
+    /** Обновляет визуальную позицию камеры по времени; вне шага не трогает её. */
+    private void advanceStep(long now) {
+        if (stepEnd <= stepStart) return;    // активного шага нет
+        int t = (int) ((now - stepStart) * 256L / (stepEnd - stepStart));
+        if (t < 0) t = 0;
+        if (t > 256) t = 256;
+        int e = stepEase(t);
+        posX = stepFromX + ((stepToX - stepFromX) * e >> 8);
+        posY = stepFromY + ((stepToY - stepFromY) * e >> 8);
+        if (t == 256) {
+            posX = stepToX;
+            posY = stepToY;
+            stepEnd = stepStart;
+        }
+    }
+
+    /** Ставит камеру ровно в логическую клетку и отменяет незаконченный шаг. */
+    private void snapStep() {
+        posX = stepFromX = stepToX = playerTX * FP + FP / 2;
+        posY = stepFromY = stepToY = playerTY * FP + FP / 2;
+        stepStart = 0;
+        stepEnd = 0;
     }
 
     /** Старт этажа / восстановление сейва: камера уже смотрит куда надо. */
@@ -1286,8 +1383,7 @@ public final class Game extends Canvas {
             if (!aiming) { aimX = w >> 1; aimY = viewH >> 1; }
             Level restored = Level.restore(in);
             level = restored;
-            posX = playerTX * FP + FP / 2;
-            posY = playerTY * FP + FP / 2;
+            snapStep();                      // сейв: камера сразу в клетке
             setVectors();
             level.computeDist(playerTX, playerTY);
             renderer.setVbMode(vb);
@@ -1335,7 +1431,8 @@ public final class Game extends Canvas {
 
     private void renderFrame(long now) {
         int[] buf = renderer.screen;
-        fill(buf, 0xff0d0812);
+        fill(buf, C_BG);
+        Gfx.setScreen(state);
         switch (state) {
             case TITLE: drawTitle(buf, now); break;
             case HELP: drawHelp(buf); break;
@@ -1362,13 +1459,18 @@ public final class Game extends Canvas {
                 break;
             default: break;
         }
+        Gfx.setScreen(-1);
+        Gfx.drawOverlay(buf, w, h);   // необязательный gfx/overlay.png
     }
 
     private void fill(int[] buf, int c) {
+        // Если в JAR лежит gfx/screen-<имя>.png, он становится фоном экрана.
+        if (Gfx.plate(buf, w, h)) return;
         for (int i = 0; i < buf.length; i++) buf[i] = c;
     }
 
     private void box(int[] buf, int x, int y, int bw, int bh, int fill, int border) {
+        if (bgOnly) return;   // экспорт чистого фона: панели рисует игра поверх PNG
         for (int j = y; j < y + bh; j++) {
             if (j < 0 || j >= h) continue;
             int off = j * w;
@@ -1508,15 +1610,18 @@ public final class Game extends Canvas {
     // ----------------------------------------------------------------------- меню
 
     private void drawTitle(int[] buf, long now) {
-        for (int y = 0; y < h; y++) {
-            int v = 12 + (y * 22) / h;
-            int c = 0xff000000 | (v << 16) | ((v / 2) << 8) | (v + 12);
-            hline(buf, 0, w - 1, y, c);
-        }
-        for (int i = 0; i < 120; i++) {
-            int x = (i * 73) % w;
-            int y = (i * 41) % h;
-            buf[y * w + x] = 0xff3a2048;
+        fill(buf, C_BG);
+        if (!Gfx.hasPlate(0)) {
+            for (int y = 0; y < h; y++) {
+                int v = 12 + (y * 22) / h;
+                int c = 0xff000000 | (v << 16) | ((v / 2) << 8) | (v + 12);
+                hline(buf, 0, w - 1, y, c);
+            }
+            for (int i = 0; i < 120; i++) {
+                int x = (i * 73) % w;
+                int y = (i * 41) % h;
+                buf[y * w + x] = 0xff3a2048;
+            }
         }
         center("ГИГАХРУЩЁВКА", 8, C_PURPLE, 2);
         center("САМОСБОР: ЛИКВИДАТОР", 30, C_WHITE, 1);
@@ -1527,7 +1632,7 @@ public final class Game extends Canvas {
         }
 
         int boxY = 116;
-        box(buf, 6, boxY, w - 12, h - boxY - 14, 0xff140b1c, C_PURPLE);
+        box(buf, 6, boxY, w - 12, h - boxY - 14, C_PANEL, C_PURPLE);
         for (int i = 0; i < MENU.length; i++) {
             int y = boxY + 10 + i * 19;
             if (i == menuIndex) {
@@ -1552,14 +1657,15 @@ public final class Game extends Canvas {
     }
 
     private void drawHelp(int[] buf) {
-        fill(buf, 0xff120a1a);
+        fill(buf, C_SCREEN_BG);
         center("УПРАВЛЕНИЕ", 8, C_PURPLE, 2);
         int y = 34;
         String[] lines = {
             "ЛЕВЫЙ РЕЖИМ (ХОДЬБА)",
             "2 ВПЕРЁД  8 НАЗАД",
             "4 ПОВОРОТ 90  6 ПОВОРОТ 90",
-            "КАМЕРА ДОВОРАЧИВАЕТ ПЛАВНО",
+            "1 СТРЕЙФ ВЛЕВО 3 ВПРАВО",
+            "ШАГИ И ПОВОРОТЫ ПЛАВНЫЕ",
             "7 ДОСТАТЬ ОРУЖИЕ",
             "В РЕЖИМЕ ПРИЦЕЛА:",
             "2/4/6/8 ДВИГАЮТ ПРИЦЕЛ",
@@ -1577,19 +1683,21 @@ public final class Game extends Canvas {
             "5 ИЛИ 9 - НАЗАД"
         };
         for (int i = 0; i < lines.length; i++) {
-            int c = (i == 0 || i == 4 || i == 5) ? C_YELLOW : C_WHITE;
+            int c = (i == 0 || i == 5 || i == 6) ? C_YELLOW : C_WHITE;
             BitmapFont.drawShadow(buf, w, h, lines[i], 6, y + i * 11, c, 1);
         }
     }
 
     private void drawBrief(int[] buf) {
-        fill(buf, 0xff120a1a);
-        for (int y = 0; y < h; y += 8) hline(buf, 0, w - 1, y, 0xff1c1026);
+        fill(buf, C_SCREEN_BG);
+        if (!Gfx.hasPlate(2)) {
+            for (int y = 0; y < h; y += 8) hline(buf, 0, w - 1, y, 0xff1c1026);
+        }
         center("ЭТАЖ " + floorNumber, 16, C_PURPLE, 2);
         center("ЭТАП " + (stage + 1) + " ИЗ 13", 44, C_WHITE, 1);
         int sec = level.timeLimitSec;
         center("ДО САМОСБОРА: " + two(sec / 60) + ":" + two(sec % 60), 62, C_YELLOW, 1);
-        box(buf, 8, 82, w - 16, 92, 0xff0d0812, C_PURPLE);
+        box(buf, 8, 82, w - 16, 92, C_BG, C_PURPLE);
         int y = 90;
         BitmapFont.drawShadow(buf, w, h, "ЗАДАЧА: НАЙТИ ПРОПУСК", 14, y, C_WHITE, 1);
         BitmapFont.drawShadow(buf, w, h, "И ОТКРЫТЬ ГЕРМОДВЕРЬ", 14, y + 12, C_WHITE, 1);
@@ -1602,7 +1710,7 @@ public final class Game extends Canvas {
     }
 
     private void drawEnding(int[] buf, long now) {
-        fill(buf, 0xff0d0812);
+        fill(buf, C_BG);
         for (int i = 0; i < 3; i++) {
             int t = (int) (now / 700 + i);
             if ((t & 1) == 0) blit(titleMonsters[i], 8 + i * (w / 3), h - 104, 1);
@@ -1616,7 +1724,7 @@ public final class Game extends Canvas {
         if (state == DEAD && deathReason.length() > 0) {
             center(deathReason, 112, C_RED, 1);
         }
-        box(buf, 6, 128, w - 12, 40, 0xff140b1c, C_PURPLE);
+        box(buf, 6, 128, w - 12, 40, C_PANEL, C_PURPLE);
         BitmapFont.drawShadow(buf, w, h,
                 "ЭТАП " + (stage + 1) + "/13  ЭТАЖ " + floorNumber +
                 "  БЫСТРЫХ: " + fastFloors, 12, 136, C_WHITE, 1);
@@ -1626,7 +1734,7 @@ public final class Game extends Canvas {
 
         int n = endMenuCount();
         int my = 180;
-        box(buf, 6, my - 6, w - 12, n * 19 + 14, 0xff140b1c, C_PURPLE);
+        box(buf, 6, my - 6, w - 12, n * 19 + 14, C_PANEL, C_PURPLE);
         for (int i = 0; i < n; i++) {
             int y = my + i * 19;
             String label;
@@ -1655,7 +1763,7 @@ public final class Game extends Canvas {
             buf[i] = 0xff000000 | ((c & 0xfefefe) >> 1);
         }
         int boxY = 78;
-        box(buf, 6, boxY, w - 12, 168, 0xff140b1c, C_PURPLE);
+        box(buf, 6, boxY, w - 12, 168, C_PANEL, C_PURPLE);
         center("ПАУЗА", boxY + 6, C_PURPLE, 2);
         int sec = (int) (timeLeftMs / 1000);
         if (sec < 0) sec = 0;
@@ -1720,6 +1828,7 @@ public final class Game extends Canvas {
     }
 
     private void line(int[] buf, int x0, int y0, int x1, int y1, int c) {
+        if (bgOnly) return;
         int dx = x1 - x0, dy = y1 - y0;
         int n = Math.abs(dx) > Math.abs(dy) ? Math.abs(dx) : Math.abs(dy);
         if (n == 0) n = 1;
@@ -1854,7 +1963,7 @@ public final class Game extends Canvas {
         s2.append("ПАТР "); s2.append(magazine); s2.append("/"); s2.append(reserve);
         s2.append(hasKey ? "  ~ПРОПУСК" : "  ~НЕТ");
         hudLine2 = s2.toString();
-        hudLine3 = aiming ? "7 УБРАТЬ  2/4/6/8 ПРИЦЕЛ" : "7 ОРУЖИЕ  2/8 ШАГ 4/6 ПОВОРОТ";
+        hudLine3 = aiming ? "7 УБРАТЬ  1/3 СТРЕЙФ" : "7 ОРУЖИЕ 2/8 ШАГ 1/3 СТРЕЙФ";
         hudLine4 = "5 ОГОНЬ 0 ЗАРЯД * VB # КАРТА";
         StringBuffer s5 = new StringBuffer();
         s5.append("ЭТАП "); s5.append(stage + 1); s5.append("/13 АВТОСЕЙВ ПРАВ=ПАУЗА");
@@ -1865,7 +1974,19 @@ public final class Game extends Canvas {
     }
 
     private void drawHud(int[] buf, long now) {
-        box(buf, 0, viewH, w, hudH, C_DARK, C_PURPLE);
+        Raster plate = Gfx.hud();
+        if (plate != null && plate.w == w && plate.h == hudH) {
+            int[] p = (renderer.vbMode && plate.vb != null) ? plate.vb : plate.p;
+            for (int j = 0; j < hudH; j++) {
+                int row = (viewH + j) * w;
+                for (int i = 0; i < w; i++) {
+                    int c = p[j * w + i];
+                    if ((c >>> 24) != 0) buf[row + i] = c;
+                }
+            }
+        } else {
+            box(buf, 0, viewH, w, hudH, C_DARK, C_PURPLE);
+        }
         rebuildHud();
         int y = viewH + 4;
         int col = timeLeftMs < SIREN_MS ? C_RED : C_WHITE;
@@ -1882,13 +2003,28 @@ public final class Game extends Canvas {
 
     private void drawCrosshair(int[] buf) {
         if (showMap) return;
-        int c = C_RED;
+        int c = C_CROSSHAIR;
         for (int i = 0; i < renderer.sprCount; i++) {
             if (aimX >= renderer.sprLeft[i] && aimX < renderer.sprRight[i] &&
                     aimY >= renderer.sprTop[i] && aimY < renderer.sprBottom[i]) {
-                c = C_YELLOW;
+                c = C_CROSSHAIR_HOT;
                 break;
             }
+        }
+        Raster spr = Gfx.crosshair(c == C_CROSSHAIR_HOT);
+        if (spr != null) {
+            // PNG — маска прицела; цвет берётся из открытой палитры.
+            int x0 = aimX - (spr.w >> 1), y0 = aimY - (spr.h >> 1);
+            for (int j = 0; j < spr.h; j++) {
+                for (int i = 0; i < spr.w; i++) {
+                    if ((spr.p[j * spr.w + i] >>> 24) == 0) continue;
+                    int xx = x0 + i, yy = y0 + j;
+                    if (xx >= 0 && xx < w && yy >= 0 && yy < viewH) {
+                        buf[yy * w + xx] = c;
+                    }
+                }
+            }
+            return;
         }
         hline(buf, aimX - 9, aimX - 4, aimY, c);
         hline(buf, aimX + 4, aimX + 9, aimY, c);
@@ -1901,7 +2037,7 @@ public final class Game extends Canvas {
         if (message.length() == 0) return;
         int bw = BitmapFont.width(message, 1) + 12;
         if (bw > w - 8) bw = w - 8;
-        box(buf, (w - bw) >> 1, 5, bw, 18, 0xff140b1c, C_PURPLE);
+        box(buf, (w - bw) >> 1, 5, bw, 18, C_PANEL, C_PURPLE);
         BitmapFont.drawShadow(buf, w, h, message, ((w - bw) >> 1) + 6, 9, messageColor, 1);
     }
 
@@ -1923,7 +2059,7 @@ public final class Game extends Canvas {
     // --------------------------------------------------------------------- карта
 
     private void drawMap(int[] buf) {
-        fill(buf, 0xff0b0610);
+        fill(buf, C_MAP_BG);
         center("КАРТА ЭТАЖА " + floorNumber, 5, C_PURPLE, 1);
         int cs = min((w - 10) / level.w, (h - 76) / level.h);
         if (cs < 2) cs = 2;
@@ -1931,7 +2067,7 @@ public final class Game extends Canvas {
         int oy = 26 + ((h - 76 - cs * level.h) >> 1);
         if (oy < 24) oy = 24;
         box(buf, ox - 2, oy - 2, level.w * cs + 4, level.h * cs + 4,
-                0xff0b0610, C_PURPLE);
+                C_MAP_BG, C_PURPLE);
         for (int y = 0; y < level.h; y++) {
             for (int x = 0; x < level.w; x++) {
                 int i = level.idx(x, y);
@@ -1943,7 +2079,7 @@ public final class Game extends Canvas {
                 else if (level.tile[i] == Level.EXIT) c = 0xffd8cf40;
                 else if (level.tile[i] == Level.CRACKED) c = 0xff8b2c9b;
                 else c = 0xff24202c;
-                box(buf, ox + x * cs, oy + y * cs, cs, cs, c, 0xff0b0610);
+                box(buf, ox + x * cs, oy + y * cs, cs, cs, c, C_MAP_BG);
                 if (level.seen[i] && (hasBlack || hasWhite)) {
                     for (int k = 0; k < level.itemCount; k++) {
                         if (level.itemX[k] != x || level.itemY[k] != y) continue;
