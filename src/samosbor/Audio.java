@@ -18,11 +18,12 @@ public final class Audio {
 
     public static final int SHOT = 0, HIT = 1, KILL = 2, PICKUP = 3,
             DOOR = 4, HURT = 5, SIREN = 6, MENU = 7, STEP = 8,
-            DRAW = 9, RELOAD = 10;
+            DRAW = 9, RELOAD = 10, BREACH = 11;
 
     private static final String[] FILES = {
         "shot.mid", "hit.mid", "kill.mid", "pickup.mid", "door.mid",
-        "hurt.mid", "siren.mid", "menu.mid", "step.mid", "draw.mid", "reload.mid"
+        "hurt.mid", "siren.mid", "menu.mid", "step.mid", "draw.mid",
+        "reload.mid", "breach.mid"
     };
 
     /** Для HTML-превью (озвучка через WebAudio). */

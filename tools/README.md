@@ -13,7 +13,8 @@
 
 * `gen_textures.py` — 16 индексированных PNG 64×64 для стен/пола.
 * `gen_font.py` — кириллический bitmap-шрифт 5×7 (96 глифов).
-* `gen_audio.py` — 13 SMF/MIDI: `theme.mid`, `danger.mid` (сирена) и 11 эффектов.
+* `gen_audio.py` — 14 SMF/MIDI: `theme.mid`, `danger.mid` (сирена) и 12 эффектов
+  (включая `breach.mid` — пробой стены тварью).
 
 `tools/preview/` — JDK8-превью и `SelfTest`: MIDP-, MMAPI- и RMS-заглушки, чтобы
 тот же игровой Java-код запускался на десктопе. В J2ME-JAR не включается.

@@ -62,6 +62,7 @@ public final class Monster {
     // замирает в позе выпада, а после попадания шарахается в сторону.
     public int homeX, homeY;
     public long windupUntil, fleeUntil, noticedUntil, nextWander;
+    public long nextBreach;   // кулдаун «пробить стену» (ROM: иногда ломают стену)
     public int attackCooldown;
 
     private Monster() {}
@@ -76,8 +77,9 @@ public final class Monster {
         m.extra = r.nextInt(EXTRA.length);
         m.palette = r.nextInt(SKIN.length);
 
-        m.maxHp = 2 + m.torso + m.head / 2 + floorIndex / 4;
-        if (m.maxHp > 10) m.maxHp = 10;
+        // В оригинале на тварь уходит ровно 2–8 пуль, и у каждой особи
+        // это число постоянно (не зависит от того, куда попал выстрел).
+        m.maxHp = 2 + (m.torso + m.head / 2 + m.extra / 2 + floorIndex / 6) % 7;
         m.hp = m.maxHp;
         // В оригинале укус снимает ОДНО сердце; твари опасны числом, а не уроном.
         m.damage = 1;
@@ -143,6 +145,7 @@ public final class Monster {
         m.fleeUntil = in.readLong();
         m.noticedUntil = in.readLong();
         m.nextWander = in.readLong();
+        m.nextBreach = in.readLong();
         m.homeX = in.readInt();
         m.homeY = in.readInt();
         m.frameIndex = in.readInt();
@@ -184,6 +187,7 @@ public final class Monster {
         out.writeLong(fleeUntil);
         out.writeLong(noticedUntil);
         out.writeLong(nextWander);
+        out.writeLong(nextBreach);
         out.writeInt(homeX);
         out.writeInt(homeY);
         out.writeInt(frameIndex);
@@ -212,6 +216,7 @@ public final class Monster {
         fleeUntil = 0;
         noticedUntil = 0;
         nextWander = 0;
+        nextBreach = 0;
         frameIndex = 0;
     }
 

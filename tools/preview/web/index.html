@@ -68,6 +68,7 @@
         <tr><td>в прицеле: 2/4/6/8</td><td><span class="key">↑</span><span class="key">←</span><span class="key">↓</span><span class="key">→</span></td></tr>
         <tr><td>огонь / перезарядка</td><td><span class="key">5</span><span class="key">Space</span> / <span class="key">0</span><span class="key">R</span></td></tr>
         <tr><td>очки Virtual Boy / карта</td><td><span class="key">*</span><span class="key">V</span> / <span class="key">#</span><span class="key">M</span></td></tr>
+        <tr><td><b>меню паузы (прав. софт)</b></td><td><span class="key">P</span><span class="key">F2</span> / кнопка ниже</td></tr>
       </table>
       <div class="note">Без оружия 2/8 — шаг на клетку, 4/6 — поворот на 90°.
         С оружием те же кнопки двигают прицел, 5 стреляет. В меню 2/8
@@ -84,6 +85,9 @@
       <div class="row">
         <button data-k="42">* VB</button><button data-k="35"># КАРТА</button>
         <button data-k="49">1</button><button data-k="51">3</button><button data-k="57">9</button>
+      </div>
+      <div class="row">
+        <button class="hot" data-k="-7">ПРАВ. СОФТ — ПАУЗА</button>
       </div>
       <button id="snd">▶ ВКЛЮЧИТЬ ЗВУК (WebAudio-эффекты)</button>
     </div>
@@ -121,6 +125,7 @@
     'r':[48],'0':[48],
     'v':[42],'*':[42],
     'm':[35],'#':[35],'Escape':[35],
+    'p':[-7],'F2':[-7],
     '1':[49],'3':[51],'9':[57]
   };
   const down=new Set();
@@ -166,7 +171,8 @@
     'door.mid':[240,0.20,'triangle',0.11], 'hurt.mid':[90,0.26,'sawtooth',0.15],
     'siren.mid':[440,0.55,'sawtooth',0.10], 'menu.mid':[520,0.05,'square',0.06],
     'step.mid':[70,0.045,'triangle',0.05], 'draw.mid':[300,0.09,'square',0.09],
-    'reload.mid':[210,0.12,'square',0.09]
+    'reload.mid':[210,0.12,'square',0.09],
+    'breach.mid':[55,0.34,'sawtooth',0.17]
   };
   function tone(freq,dur,type,vol,slide){
     if(!ac||ac.state!=='running') return;
@@ -189,6 +195,7 @@
   function sfx(name){
     const p=TONES[name]; if(!p) return;
     if(name==='shot.mid'){ noise(0.11,0.20); tone(150,0.13,'square',0.09,55); return; }
+    if(name==='breach.mid'){ noise(0.30,0.22); tone(70,0.32,'sawtooth',0.13,40); return; }
     if(name==='siren.mid'){ tone(440,0.4,'sawtooth',0.08,660); tone(660,0.4,'sawtooth',0.06,440); return; }
     if(name==='pickup.mid'){ tone(440,0.09,'sine',0.10); setTimeout(()=>tone(880,0.12,'sine',0.10),80); return; }
     tone(p[0],p[1],p[2],p[3],name==='hurt.mid'?45:0);

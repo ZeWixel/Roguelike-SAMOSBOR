@@ -11,6 +11,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -191,8 +192,69 @@ public final class Preview {
 
         tap(g, 42); g.paint(g2);                          // * = очки Virtual Boy
         save(img, new File(d, "09-virtualboy.png"));
+        tap(g, 42);                                       // снять очки VB
+
+        forceBreach(g);
+        g.paint(g2);
+        save(img, new File(d, "10-breach.png"));           // тварь пробила стену
+
+        tap(g, -7); g.paint(g2);                          // правая софт = пауза
+        save(img, new File(d, "11-pause.png"));
         Save.clear();
         System.out.println("capture done -> " + dir);
+    }
+
+    /** Для кадра: ставим тварь за CRACKED-стеной и заставляем её пробить её. */
+    private static void forceBreach(Game g) throws Exception {
+        Field fl = field(Game.class, "level");
+        Field fpx = field(Game.class, "playerTX");
+        Field fpy = field(Game.class, "playerTY");
+        Field fposx = field(Game.class, "posX");
+        Field fposy = field(Game.class, "posY");
+        Field fdeg = field(Game.class, "dirDeg");
+        Level lv = (Level) fl.get(g);
+        int[] dxs = {1, -1, 0, 0};
+        int[] dys = {0, 0, 1, -1};
+        for (int y = 1; y < lv.h - 1; y++) {
+            for (int x = 1; x < lv.w - 1; x++) {
+                if (!lv.isBreakable(x, y)) continue;
+                for (int k = 0; k < 4; k++) {
+                    int mx = x - dxs[k], my = y - dys[k];
+                    int px = x + dxs[k], py = y + dys[k];
+                    if (lv.isWall(mx, my) || lv.isWall(px, py)) continue;
+                    Monster m = lv.monsters[0];
+                    m.place(mx, my);
+                    for (int i = 1; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
+                    fpx.setInt(g, px);
+                    fpy.setInt(g, py);
+                    fposx.setInt(g, px * 4096 + 2048);
+                    fposy.setInt(g, py * 4096 + 2048);
+                    int vx = x - px, vy = y - py;
+                    fdeg.setInt(g, vx > 0 ? 180 : (vx < 0 ? 0 : (vy > 0 ? 270 : 90)));
+                    method(Game.class, "setVectors", new Class[0]).invoke(g, new Object[0]);
+                    for (int yy = py - 2; yy <= py + 2; yy++) {
+                        for (int xx = px - 2; xx <= px + 2; xx++) lv.markSeen(xx, yy);
+                    }
+                    Method tb = method(Game.class, "tryBreachWall",
+                            new Class[] {Monster.class, long.class});
+                    boolean ok = ((Boolean) tb.invoke(g, new Object[] {m,
+                            new Long(System.currentTimeMillis() + 10000L)})).booleanValue();
+                    if (ok) return;
+                }
+            }
+        }
+    }
+
+    private static Field field(Class c, String name) throws Exception {
+        Field f = c.getDeclaredField(name);
+        f.setAccessible(true);
+        return f;
+    }
+
+    private static Method method(Class c, String name, Class[] sig) throws Exception {
+        Method m = c.getDeclaredMethod(name, sig);
+        m.setAccessible(true);
+        return m;
     }
 
     /** Ставит тварь в паре клеток перед игроком — только для скриншота. */

@@ -22,6 +22,8 @@ public final class SelfTest {
         testSave();
         testMonsters();
         testEnemyAI();
+        testPauseAndCrosshair();
+        testRomMechanics();
         testFullRun();
         System.out.println("SelfTest: " + checks + " checks, " + failures + " failures");
         if (failures > 0) System.exit(1);
@@ -186,6 +188,8 @@ public final class SelfTest {
                     "monster " + i + ": bad stats");
             check(m.description().indexOf("/") > 0, "monster " + i + ": no parts description");
             check(m.damage == 1, "monster " + i + ": bite must cost 1 heart");
+            check(m.maxHp >= 2 && m.maxHp <= 8,
+                    "monster " + i + ": ROM needs 2-8 bullets per monster");
             check(m.speedMs >= 1150 && m.sight <= 5,
                     "monster " + i + ": slow, short-sighted AI stats");
         }
@@ -252,6 +256,175 @@ public final class SelfTest {
         check(fPX.getInt(g) == px && fPY.getInt(g) == py, "bump does not move player");
         Save.clear();
         System.out.println("  enemy AI: ok (health " + hp + " after 6 s)");
+    }
+
+    // ------------------------------------------- пауза и возврат прицела в центр
+
+    private static void testPauseAndCrosshair() throws Exception {
+        Save.clear();
+        BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
+        Graphics gfx = new Graphics(img);
+        Game g = new Game(null);
+        tap(g, 53);
+        tap(g, 53);
+        Field fState = field(Game.class, "state");
+        Field fAiming = field(Game.class, "aiming");
+        Field fAimX = field(Game.class, "aimX");
+        Field fAimY = field(Game.class, "aimY");
+        Field fW = field(Game.class, "w");
+        Field fViewH = field(Game.class, "viewH");
+        Field fTime = field(Game.class, "timeLeftMs");
+
+        tap(g, 55);                       // достать оружие
+        check(fAiming.getBoolean(g), "7 draws weapon");
+        fAimX.setInt(g, 17);
+        fAimY.setInt(g, 33);
+        tap(g, 55);                       // убрать оружие
+        check(!fAiming.getBoolean(g), "7 holsters weapon");
+        check(fAimX.getInt(g) == fW.getInt(g) >> 1 &&
+                fAimY.getInt(g) == fViewH.getInt(g) >> 1,
+                "crosshair returns to screen centre after holstering");
+
+        tap(g, -7);                       // правая софт-клавиша
+        check(fState.getInt(g) == 6, "right soft key opens PAUSE menu");
+        long before = fTime.getLong(g);
+        g.paint(gfx);
+        g.paint(gfx);
+        g.paint(gfx);
+        check(fTime.getLong(g) == before, "timer frozen while paused");
+        tap(g, -7);
+        check(fState.getInt(g) == 3, "right soft key resumes PLAY");
+        Save.clear();
+        System.out.println("  pause + crosshair: ok");
+    }
+
+    // ---------------------------------------------- сверка с ROM Insmouse no Yakata
+
+    private static void testRomMechanics() throws Exception {
+        Save.clear();
+        Game g = new Game(null);
+        tap(g, 53);
+        tap(g, 53);
+        Field fLevel = field(Game.class, "level");
+        Field fRenderer = field(Game.class, "renderer");
+        Field fAiming = field(Game.class, "aiming");
+        Field fAimX = field(Game.class, "aimX");
+        Field fAimY = field(Game.class, "aimY");
+        Field fMag = field(Game.class, "magazine");
+        Field fShowMap = field(Game.class, "showMap");
+        Field fTime = field(Game.class, "timeLeftMs");
+        Level lv = (Level) fLevel.get(g);
+        Renderer r = (Renderer) fRenderer.get(g);
+
+        // ROM/FAQ: «Monsters need to be shot with 2-8 bullets», выстрел = 1 HP.
+        r.sprCount = 1;
+        r.sprIndex[0] = 0;
+        r.sprLeft[0] = 0;   r.sprRight[0] = 240;
+        r.sprTop[0] = 0;    r.sprBottom[0] = 264;
+        r.sprDepth[0] = 100;
+        fAiming.setBoolean(g, true);
+        fAimX.setInt(g, 120);
+        fAimY.setInt(g, 132);
+        fMag.setInt(g, 20);
+        Monster target = lv.monsters[0];
+        target.hp = target.maxHp;
+        target.alive = true;
+        Method fire = method(Game.class, "fire", new Class[] {long.class});
+        int shots = 0;
+        while (target.alive && shots < 12) {
+            fire.invoke(g, new Object[] {new Long(System.currentTimeMillis())});
+            shots++;
+        }
+        check(!target.alive, "monster can be killed");
+        check(shots == target.maxHp, "exactly maxHp bullets kill it (" + shots + "/" + target.maxHp + ")");
+        check(shots >= 2 && shots <= 8, "bullet count within ROM's 2-8 range");
+        r.sprCount = 0;
+
+        // ROM/FAQ: «The timer stops while you are on the map screen».
+        fShowMap.setBoolean(g, true);
+        long t0 = fTime.getLong(g);
+        Method update = method(Game.class, "update", new Class[] {long.class, long.class});
+        update.invoke(g, new Object[] {new Long(5000), new Long(300000L)});
+        check(fTime.getLong(g) == t0, "timer stops on map screen");
+        fShowMap.setBoolean(g, false);
+
+        // ROM/FAQ: «sometimes a monster will break through a wall».
+        Game g2 = new Game(null);
+        tap(g2, 53);
+        tap(g2, 53);
+        Level lv2 = (Level) fLevel.get(g2);
+        Field fPX = field(Game.class, "playerTX");
+        Field fPY = field(Game.class, "playerTY");
+        Field fPosX = field(Game.class, "posX");
+        Field fPosY = field(Game.class, "posY");
+        Field fHealth = field(Game.class, "health");
+        int[] dxs = {1, -1, 0, 0};
+        int[] dys = {0, 0, 1, -1};
+        int wx = -1, wy = -1, px = -1, py = -1, mx = -1, my = -1;
+        for (int y = 1; y < lv2.h - 1 && wx < 0; y++) {
+            for (int x = 1; x < lv2.w - 1 && wx < 0; x++) {
+                if (!lv2.isBreakable(x, y)) continue;
+                for (int k = 0; k < 4; k++) {
+                    int ax = x - dxs[k], ay = y - dys[k];
+                    int bx = x + dxs[k], by = y + dys[k];
+                    if (lv2.isWall(ax, ay) || lv2.isWall(bx, by)) continue;
+                    wx = x; wy = y; mx = ax; my = ay; px = bx; py = by;
+                    break;
+                }
+            }
+        }
+        if (wx < 0) {
+            // На редком сиде трещин может не оказаться рядом с коридором — создаём «B».
+            for (int y = 1; y < lv2.h - 1 && wx < 0; y++) {
+                for (int x = 1; x < lv2.w - 1 && wx < 0; x++) {
+                    if (!lv2.isWall(x, y)) continue;
+                    if (!lv2.isWall(x - 1, y) && !lv2.isWall(x + 1, y)) {
+                        lv2.tile[lv2.idx(x, y)] = Level.CRACKED;
+                        wx = x; wy = y; mx = x - 1; my = y; px = x + 1; py = y;
+                    }
+                }
+            }
+        }
+        check(wx >= 0, "ROM test: found a breakable ('B') wall between corridors");
+        if (wx < 0) { Save.clear(); return; }
+
+        for (int i = 1; i < lv2.monsterCount; i++) {
+            lv2.monsters[i].alive = false;
+            lv2.monsters[i].respawnAt = 0;
+        }
+        Monster ambusher = lv2.monsters[0];
+        ambusher.place(mx, my);
+        ambusher.nextBreach = 1;                 // кулдаун уже истёк
+        ambusher.nextThink = Long.MAX_VALUE;     // только пробой, без блуждания
+        ambusher.nextAttack = Long.MAX_VALUE;
+        ambusher.windupUntil = 0;
+        ambusher.fleeUntil = 0;
+        ambusher.noticedUntil = 0;
+        fPX.setInt(g2, px);
+        fPY.setInt(g2, py);
+        fPosX.setInt(g2, px * 4096 + 2048);
+        fPosY.setInt(g2, py * 4096 + 2048);
+        fHealth.setInt(g2, 3);
+        lv2.computeDist(px, py);
+        check(!lv2.lineOfSight(mx, my, px, py), "ROM test: wall blocks line of sight");
+
+        long fakeNow = 400000L;
+        boolean breached = false;
+        for (int i = 0; i < 40 && !breached; i++) {
+            fakeNow += 100;
+            update.invoke(g2, new Object[] {new Long(100), new Long(fakeNow)});
+            breached = lv2.tile[lv2.idx(wx, wy)] == Level.FLOOR;
+        }
+        check(breached, "monster breaks through the CRACKED wall");
+        for (int i = 0; i < 25; i++) {
+            fakeNow += 100;
+            update.invoke(g2, new Object[] {new Long(100), new Long(fakeNow)});
+        }
+        check(fHealth.getInt(g2) == 2, "wall breach ends in exactly one heart lost");
+        check(ambusher.tileX == wx && ambusher.tileY == wy,
+                "monster steps into the hole it made");
+        Save.clear();
+        System.out.println("  ROM mechanics: ok");
     }
 
     // ----------------------------------------------------------- полный пробег

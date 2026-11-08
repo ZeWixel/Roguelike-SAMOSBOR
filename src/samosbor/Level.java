@@ -197,9 +197,9 @@ public final class Level {
                 else if (roll < 85) t = PIPES;
                 else if (roll < 89) t = GRATE;
                 else if (roll < 93) t = BRICK;
-                else if (roll < 96) t = KLET;
-                else if (roll < 98) t = LIFT;
-                else t = CRACKED; // трещины могут проламывать твари
+                else if (roll < 94) t = KLET;
+                else if (roll < 95) t = LIFT;
+                else t = CRACKED; // ~5%: «B» в картах ROM — стены, что ломают твари
                 tile[i] = t;
             }
         }
@@ -398,6 +398,7 @@ public final class Level {
         tile[i] = FLOOR;
         floorTex[i] = (byte) (rng.chance(30) ? 12 : 10);
         ceilTex[i] = 11;
+        seen[i] = true;
         return true;
     }
 
