@@ -106,6 +106,9 @@ public final class Game extends Canvas {
     private String deathReason = "";
     private boolean showMap, aiming, musicOn = true, sirenDone, hasSave;
 
+    /** Фиксированный seed для воспроизводимых кадров превью; в игре 0. */
+    static int demoSeed = 0;
+
     private int runSeed, stage, floorNumber, deaths, fastFloors, totalTimeLeft,
             minFloor, ending;
     // Пройденная ветка дерева: row[col] — номер узла в колонке col.
@@ -141,10 +144,15 @@ public final class Game extends Canvas {
         if (viewH < 80) viewH = h - 30;
         if (w < 80) w = 80;
 
-        detectKeypad();
-        detectSoftKeys();
-        // Более узкий угол обзора (5/8 вместо 3/4): стены крупнее, боковое
-        // зрение ограничено — коридор давит сильнее.
+        // Определение раскладки не должно валить MIDlet ни на одном эмуляторе:
+        // у J2ME Loader getKeyName() бросает исключение на «чужих» кодах.
+        try {
+            detectKeypad();
+            detectSoftKeys();
+        } catch (Throwable t) {
+        }
+        // Узкий угол обзора (5/8 вместо 3/4) и быстрый туман держат ощущение
+        // тесноты, хотя проходы теперь двуклеточные (Insmouse no Yakata).
         planeLen = -(5 * FP * w) / (8 * viewH);
 
         textures = new Texture[16];
@@ -182,12 +190,23 @@ public final class Game extends Canvas {
 
     // -------------------------------------------------------------- клавиатура
 
-    private boolean isSelect(int i) {
+    /**
+     * J2ME Loader (javax.microedition.lcdui.Canvas.getKeyName) бросает
+     * IllegalArgumentException «unknown keycode -9» на коды, которых нет в
+     * его таблице. Обнаружение клавиатуры перебирает -1..-32, поэтому каждый
+     * вызов обязан быть защищён — иначе MIDlet падает в startApp().
+     */
+    private String keyNameSafe(int k) {
         try {
-            return getKeyName(i).toUpperCase().indexOf("SELECT") != -1;
-        } catch (Exception e) {
-            return false;
+            String n = getKeyName(k);
+            return n == null ? "" : n.toUpperCase();
+        } catch (Throwable t) {
+            return "";
         }
+    }
+
+    private boolean isSelect(int i) {
+        return keyNameSafe(i).indexOf("SELECT") != -1;
     }
 
     private void detectKeypad() {
@@ -203,7 +222,8 @@ public final class Game extends Canvas {
         for (int k = -1; k >= -32; k--) {
             if (k == K_LEFT || k == K_RIGHT || k == K_UP || k == K_DOWN ||
                     k == K_FIRE) continue;
-            String n = getKeyName(k).toUpperCase();
+            String n = keyNameSafe(k);       // J2ME Loader: unknown keycode -> ""
+            if (n.length() == 0) continue;
             if (n.indexOf("SOFT") >= 0 && n.indexOf("RIGHT") >= 0) {
                 K_SOFT_RIGHT = k;
                 return;
@@ -216,9 +236,18 @@ public final class Game extends Canvas {
         // Эвристика по вендорам, если getKeyName() ничего не вернул.
         int[] candidates = {-7, -22, -20, -11, -10};
         for (int i = 0; i < candidates.length; i++) {
-            String n = getKeyName(candidates[i]).toUpperCase();
+            int k = candidates[i];
+            // Даже если имя недоступно, эти коды традиционно «правая софт» —
+            // проверяем их непосредственно (norm() тоже знает их явно).
+            if (k == K_LEFT || k == K_RIGHT || k == K_UP || k == K_DOWN ||
+                    k == K_FIRE) continue;
+            String n = keyNameSafe(k);
             if (n.length() > 0 && n.indexOf("LEFT") < 0) {
-                K_SOFT_RIGHT = candidates[i];
+                K_SOFT_RIGHT = k;
+                return;
+            }
+            if (n.length() == 0 && k == -7) {
+                K_SOFT_RIGHT = k;             // Nokia/SE по умолчанию
                 return;
             }
         }
@@ -241,11 +270,8 @@ public final class Game extends Canvas {
         // проверяем явно: MIDP не определяет константу KEY_SOFT_RIGHT.
         if (k == -7 || k == -22 || k == -20 || k == -11 || k == -10 ||
                 k == K_SOFT_RIGHT) return A_PAUSE;
-        try {
-            String kn = getKeyName(k).toUpperCase();
-            if (kn.indexOf("SOFT") >= 0 && kn.indexOf("RIGHT") >= 0) return A_PAUSE;
-        } catch (Exception e) {
-        }
+        String kn = keyNameSafe(k);
+        if (kn.indexOf("SOFT") >= 0 && kn.indexOf("RIGHT") >= 0) return A_PAUSE;
         try {
             int ga = getGameAction(k);
             if (ga == Canvas.UP) return A_UP;
@@ -253,7 +279,7 @@ public final class Game extends Canvas {
             if (ga == Canvas.LEFT) return A_LEFT;
             if (ga == Canvas.RIGHT) return A_RIGHT;
             if (ga == Canvas.FIRE) return A_FIRE;
-        } catch (Exception e) {
+        } catch (Throwable t) {
         }
         return -1;
     }
@@ -582,6 +608,26 @@ public final class Game extends Canvas {
     }
 
     /**
+     * Боковой обход: в коридоре шириной две клетки тварь не обязана переть
+     * в лоб — она смещается перпендикулярно линии на игрока и заходит сбоку.
+     * Возвращает false, если бок закрыт стеной/другой тварью.
+     */
+    private boolean trySidestep(Monster m, int px, int py) {
+        int adx = m.tileX - px; if (adx < 0) adx = -adx;
+        int ady = m.tileY - py; if (ady < 0) ady = -ady;
+        int sx = 0, sy = 0;
+        if (adx >= ady) sy = aiRng.chance(50) ? 1 : -1;
+        else sx = aiRng.chance(50) ? 1 : -1;
+        int nx = m.tileX + sx, ny = m.tileY + sy;
+        if (level.isWall(nx, ny) || monsterOccupies(nx, ny, m)) return false;
+        if (nx == px && ny == py) return false;
+        int nd = (nx > px ? nx - px : px - nx) + (ny > py ? ny - py : py - ny);
+        if (nd > 6) return false;               // не убегаем из боя
+        m.toX = nx; m.toY = ny; m.moveT = 0; m.moving = true;
+        return true;
+    }
+
+    /**
      * ИИ как в Insmouse no Yakata: твари медленно бродят возле своего места,
      * замечают игрока только в прямой видимости на 3–5 клеток, перед укусом
      * замирают в позе выпада (0.8 с), снимают ровно ОДНО сердце и после
@@ -666,26 +712,31 @@ public final class Game extends Canvas {
             if (!m.moving && now >= m.nextThink) {
                 m.nextThink = now + m.speedMs + aiRng.nextInt(500);
                 if (visible || m.noticedUntil > now) {
-                    int curDist = level.dist[level.idx(m.tileX, m.tileY)];
-                    int bestD = curDist, bx = m.tileX, by = m.tileY;
-                    for (int k = 0; k < 4; k++) {
-                        int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
-                        int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
-                        if (!level.inside(nx, ny)) continue;
-                        // редко проламывает трещину, только когда игрок совсем рядом
-                        if (level.isBreakable(nx, ny) && manhattan <= 2 && aiRng.chance(3)) {
-                            if (level.breakWall(nx, ny)) {
-                                level.computeDist(playerTX, playerTY);
-                                nextDistCompute = now + 600;
+                    // Широкий проход позволяет обойти сбоку, а не идти в лоб.
+                    boolean flanked = manhattan >= 2 && manhattan <= 5 &&
+                            aiRng.chance(30) && trySidestep(m, playerTX, playerTY);
+                    if (!flanked) {
+                        int curDist = level.dist[level.idx(m.tileX, m.tileY)];
+                        int bestD = curDist, bx = m.tileX, by = m.tileY;
+                        for (int k = 0; k < 4; k++) {
+                            int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
+                            int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
+                            if (!level.inside(nx, ny)) continue;
+                            // редко проламывает трещину, только когда игрок совсем рядом
+                            if (level.isBreakable(nx, ny) && manhattan <= 2 && aiRng.chance(3)) {
+                                if (level.breakWall(nx, ny)) {
+                                    level.computeDist(playerTX, playerTY);
+                                    nextDistCompute = now + 600;
+                                }
                             }
+                            if (nx == playerTX && ny == playerTY) continue; // на игрока не наступаем
+                            if (level.isWall(nx, ny) || monsterOccupies(nx, ny, m)) continue;
+                            int nd = level.dist[level.idx(nx, ny)];
+                            if (nd >= 0 && nd < bestD) { bestD = nd; bx = nx; by = ny; }
                         }
-                        if (nx == playerTX && ny == playerTY) continue; // на игрока не наступаем
-                        if (level.isWall(nx, ny) || monsterOccupies(nx, ny, m)) continue;
-                        int nd = level.dist[level.idx(nx, ny)];
-                        if (nd >= 0 && nd < bestD) { bestD = nd; bx = nx; by = ny; }
-                    }
-                    if (bx != m.tileX || by != m.tileY) {
-                        m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
+                        if (bx != m.tileX || by != m.tileY) {
+                            m.toX = bx; m.toY = by; m.moveT = 0; m.moving = true;
+                        }
                     }
                 } else if (now >= m.nextWander && aiRng.chance(28)) {
                     // Медленное блуждание в радиусе 3 клеток от «дома».
@@ -973,7 +1024,8 @@ public final class Game extends Canvas {
 
     private void newGame() {
         Save.clear();
-        runSeed = 0x1a2b000 | (int) (System.currentTimeMillis() & 1023);
+        runSeed = demoSeed != 0 ? demoSeed :
+                (0x1a2b000 | (int) (System.currentTimeMillis() & 1023));
         stage = 0;
         floorNumber = 556;
         deaths = 0;

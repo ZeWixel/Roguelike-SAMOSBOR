@@ -5,9 +5,12 @@ import java.io.DataOutputStream;
 
 /**
  * ПРОЦЕДУРНЫЙ ЭТАЖ ГИГАХРУЩЁВКИ.
- * Узкие коридоры (randomized DFS) + редкие 2x2..3x3 «квартиры» + минимум
- * петель + гермодверь, ключ-пропуск, белый/чёрный шары, патроны и твари,
- * собранные из частей тела. Клаустрофобная планировка Insmouse no Yakata.
+ * Коридоры шириной ДВЕ клетки (randomized DFS по сетке с шагом 3: 2 клетки
+ * прохода + 1 клетка стены) + редкие залы 4x3..5x4, где тварь может обойти
+ * игрока сбоку, + минимум петель + гермодверь, ключ-пропуск, белый/чёрный
+ * шары, патроны и твари из частей тела. Планировка по скриншотам
+ * Insmouse no Yakata; тесноту дают узкий обзор и туман, а не одноклеточные
+ * щели.
  * Всё детерминировано seed'ом: снимок RMS восстанавливает ровно тот же этаж.
  */
 public final class Level {
@@ -111,20 +114,28 @@ public final class Level {
 
     // ---------------------------------------------------------------- лабиринт
 
+    // Insmouse no Yakata: коридор шире одной клетки, чтобы тварь могла
+    // маневрировать. Шаг сетки 3 = 2 клетки прохода + 1 клетка стены между
+    // параллельными коридорами (иначе расширение сразу сливает их в зал).
+    private static final int NODE_STEP = 3;
+    private static final int LANE = 2;
+
     private void carveMaze() {
+        int cols = (w - 1) / NODE_STEP;
+        int rows = (h - 1) / NODE_STEP;
+        if (cols < 2) cols = 2;
+        if (rows < 2) rows = 2;
+        boolean[] visited = new boolean[cols * rows];
+        int[] stack = new int[cols * rows];
         int sp = 0;
-        int[] stackX = new int[w * h];
-        int[] stackY = new int[w * h];
-        int x = 1, y = 1;
-        tile[idx(x, y)] = FLOOR;
-        stackX[sp] = x;
-        stackY[sp] = y;
-        sp++;
+        carveNode(0, 0);
+        visited[0] = true;
+        stack[sp++] = 0;
 
         int[] dirs = new int[4];
         while (sp > 0) {
-            x = stackX[sp - 1];
-            y = stackY[sp - 1];
+            int cur = stack[sp - 1];
+            int cx = cur % cols, cy = cur / cols;
             for (int i = 0; i < 4; i++) dirs[i] = i;
             for (int i = 3; i > 0; i--) {
                 int j = rng.nextInt(i + 1);
@@ -133,16 +144,14 @@ public final class Level {
             boolean moved = false;
             for (int i = 0; i < 4; i++) {
                 int d = dirs[i];
-                int dx = d == 0 ? 1 : (d == 1 ? -1 : 0);
-                int dy = d == 2 ? 1 : (d == 3 ? -1 : 0);
-                int nx = x + dx * 2, ny = y + dy * 2;
-                if (nx <= 0 || ny <= 0 || nx >= w - 1 || ny >= h - 1) continue;
-                if (tile[idx(nx, ny)] == FLOOR) continue;
-                tile[idx(x + dx, y + dy)] = FLOOR;
-                tile[idx(nx, ny)] = FLOOR;
-                stackX[sp] = nx;
-                stackY[sp] = ny;
-                sp++;
+                int nx = cx + (d == 0 ? 1 : (d == 1 ? -1 : 0));
+                int ny = cy + (d == 2 ? 1 : (d == 3 ? -1 : 0));
+                if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+                int ni = nx + ny * cols;
+                if (visited[ni]) continue;
+                carvePassage(cx, cy, nx, ny);
+                visited[ni] = true;
+                stack[sp++] = ni;
                 moved = true;
                 break;
             }
@@ -150,26 +159,52 @@ public final class Level {
         }
     }
 
-    private void carveRooms() {
-        // Insmouse no Yakata — это в первую очередь тесные коридоры шириной
-        // в одну клетку. Больших залов нет: изредка маленькая «квартира»
-        // 2x2..3x3, где можно разминуться с тварью и перевести дух.
-        int rooms = rng.chance(60) ? 1 : 2;
-        for (int r = 0; r < rooms; r++) {
-            int rw = 2 + rng.nextInt(2);
-            int rh = 2 + rng.nextInt(2);
-            int x0 = 2 + rng.nextInt(w - rw - 4);
-            int y0 = 2 + rng.nextInt(h - rh - 4);
-            for (int y = y0; y < y0 + rh; y++) {
-                for (int x = x0; x < x0 + rw; x++) tile[idx(x, y)] = FLOOR;
+    /** Узел сетки — квадрат LANE x LANE, а не одна клетка. */
+    private void carveNode(int i, int j) {
+        carveRect(1 + i * NODE_STEP, 1 + j * NODE_STEP, LANE, LANE);
+    }
+
+    /** Проход между соседними узлами — тоже две клетки в ширину. */
+    private void carvePassage(int i0, int j0, int i1, int j1) {
+        carveNode(i1, j1);       // узел-адресат тоже должен быть выкопан
+        int x = 1 + i0 * NODE_STEP, y = 1 + j0 * NODE_STEP;
+        if (i1 != i0) {
+            int px = (i1 > i0) ? x + LANE : 1 + i1 * NODE_STEP + LANE;
+            carveRect(px, y, 1, LANE);
+        } else {
+            int py = (j1 > j0) ? y + LANE : 1 + j1 * NODE_STEP + LANE;
+            carveRect(x, py, LANE, 1);
+        }
+    }
+
+    private void carveRect(int x, int y, int rw, int rh) {
+        for (int yy = y; yy < y + rh; yy++) {
+            for (int xx = x; xx < x + rw; xx++) {
+                if (xx > 0 && yy > 0 && xx < w - 1 && yy < h - 1) {
+                    tile[idx(xx, yy)] = FLOOR;
+                }
             }
         }
     }
 
+    private void carveRooms() {
+        // Небольшие залы, как на скриншотах оригинала: широкая площадка, где
+        // тварь разворачивается и заходит сбоку. Залов мало, поэтому этаж
+        // остаётся коридорным, а не превращается в открытое поле.
+        int halls = 2 + rng.nextInt(2);
+        for (int r = 0; r < halls; r++) {
+            int rw = 4 + rng.nextInt(2);   // 4..5
+            int rh = 3 + rng.nextInt(2);   // 3..4
+            int x0 = 2 + rng.nextInt(w - rw - 4);
+            int y0 = 2 + rng.nextInt(h - rh - 4);
+            carveRect(x0, y0, rw, rh);
+        }
+    }
+
     private void carveLoops() {
-        // Мало петель => много тупиков, длинные извилистые проходы и ощущение,
-        // что стены подступают со всех сторон. Связность гарантирует
-        // connectAll() + computeDist() (проверяется в SelfTest на 60 этажах).
+        // Мало петель => сохраняются тупики и извилистые обходы, даже при
+        // двуклеточных коридорах. Связность гарантирует connectAll() +
+        // computeDist() (проверяется в SelfTest на 60 этажах).
         for (int y = 2; y < h - 2; y++) {
             for (int x = 2; x < w - 2; x++) {
                 if (tile[idx(x, y)] != WALL) continue;
@@ -253,9 +288,12 @@ public final class Level {
         }
     }
 
-    /** Добиваемся связности: отрезанные комнаты пробиваются коридором к сети. */
+    /** Добиваемся связности: отрезанные залы пробиваются коридором к сети. */
     private void connectAll() {
-        for (int pass = 0; pass < 14; pass++) {
+        // Залов и петель больше, чем в одноклеточном лабиринте: проходов
+        // должно хватать на каждый отрезанный карман, иначе часть этажа
+        // останется недостижимой (проверяется в SelfTest на 60 этажах).
+        for (int pass = 0; pass < w * h; pass++) {
             computeDist(startX, startY);
             int orphan = -1;
             for (int i = 0; i < tile.length; i++) {
@@ -275,13 +313,20 @@ public final class Level {
             int x = ox, y = oy;
             while (x != nx) {
                 x += x < nx ? 1 : -1;
-                if (x > 0 && x < w - 1) tile[idx(x, y)] = FLOOR;
+                if (x > 0 && x < w - 1) openCell(idx(x, y));
             }
             while (y != ny) {
                 y += y < ny ? 1 : -1;
-                if (y > 0 && y < h - 1) tile[idx(x, y)] = FLOOR;
+                if (y > 0 && y < h - 1) openCell(idx(x, y));
             }
         }
+    }
+
+    /** Пробитая перегородка становится полноценным полом с текстурой. */
+    private void openCell(int i) {
+        tile[i] = FLOOR;
+        floorTex[i] = 10;
+        ceilTex[i] = 11;
     }
 
     // ------------------------------------------------------------- расстановка

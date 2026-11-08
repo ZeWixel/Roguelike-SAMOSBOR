@@ -169,6 +169,15 @@ public final class Preview {
         File d = new File(dir);
         d.mkdirs();
         Save.clear();
+        // Кадры в docs/ должны быть воспроизводимыми: иначе seed забега
+        // берётся из currentTimeMillis() и «вид из коридора» случайно
+        // оказывается тупиком. Seed можно переопределить свойством.
+        int seed = 0x1a2b313;  // этаж с широким проходом и тварью вдалеке
+        String s = System.getProperty("samosbor.capture.seed");
+        if (s != null) {
+            try { seed = Integer.decode(s).intValue(); } catch (Exception ignored) {}
+        }
+        Game.demoSeed = seed;
         Game g = new Game(null);
         BufferedImage img = frame;
         Graphics g2 = gfx;

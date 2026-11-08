@@ -11,7 +11,9 @@ import java.lang.reflect.Method;
  *  - автосохранение RMS: снимок, восстановление уровня/тварей, «продолжить»;
  *  - спрайты монстров из всех видов частей тела;
  *  - новый ИИ: телеграфированный укус, 1 сердце, толчок не ранит;
- *  - клаустрофобные коридоры: доля узких клеток и отсутствие больших залов;
+ *  - старт на J2ME Loader: getKeyName() бросает «unknown keycode -9»;
+ *  - широкие коридоры Insmouse no Yakata: двуклеточные проходы, залы,
+ *    связность и место для бокового манёвра тварей;
  *  - карта продвижения: 45 узлов ROM, 13 колонок, 4 концовки, переходы;
  *  - плавный доворот камеры: дробные sin/cos, ease-in-out, логика ровно 90°;
  *  - полный пробег: 13 этажей от старта до концовки A.
@@ -21,6 +23,7 @@ public final class SelfTest {
     private static int checks = 0, failures = 0;
 
     public static void main(String[] args) throws Exception {
+        testJ2MELoaderStartup();
         testLevels();
         testSave();
         testMonsters();
@@ -435,24 +438,84 @@ public final class SelfTest {
 
     // ----------------------------------------------------------- полный пробег
 
-    /** Клаустрофобность: почти все клетки — коридоры, больших залов нет. */
+    /**
+     * Регрессия из лога J2ME Loader: RuntimeException: Failed startApp вызвана
+     * IllegalArgumentException: unknown keycode -9 в Canvas.getKeyName() ->
+     * Game.detectSoftKeys(). Строгая заглушка в tools/preview/stub теперь
+     * бросает то же исключение на неизвестных кодах, поэтому каждый new Game()
+     * в этом файле проверяет и исправление тоже.
+     */
+    private static void testJ2MELoaderStartup() throws Exception {
+        Game g = new Game(null);
+        boolean strict = false;
+        try {
+            g.getKeyName(-9);
+        } catch (IllegalArgumentException e) {
+            strict = e.getMessage() != null &&
+                    e.getMessage().indexOf("unknown keycode") >= 0;
+        }
+        check(strict, "stub reproduces J2ME Loader unknown keycode -9");
+        check(true, "Game() survives strict getKeyName() in startApp");
+        Field fSoft = field(Game.class, "K_SOFT_RIGHT");
+        check(fSoft.getInt(g) == -7, "right soft key still found by name");
+        Method norm = method(Game.class, "norm", new Class[] {int.class});
+        check(((Integer) norm.invoke(g, new Object[] {new Integer(-7)})).intValue() == 12,
+                "right soft key still maps to pause");
+        check(((Integer) norm.invoke(g, new Object[] {new Integer(-9)})).intValue() == -1,
+                "unknown keycode -9 is ignored, not fatal");
+        check(((Integer) norm.invoke(g, new Object[] {new Integer(53)})).intValue() == 4,
+                "keypad still works after safe key-name lookup");
+        for (int k = -1; k >= -32; k--) {
+            norm.invoke(g, new Object[] {new Integer(k)});
+        }
+        check(true, "norm() survives every -1..-32 vendor keycode");
+
+        // Худший случай: getKeyName() не знает вообще ни одного вендорского
+        // кода. Раскладка по умолчанию и явный fallback -7 должны выжить.
+        javax.microedition.lcdui.Canvas.rejectAllVendorNames = true;
+        try {
+            Game g2 = new Game(null);
+            check(fSoft.getInt(g2) == -7,
+                    "right soft key falls back to -7 when all names are rejected");
+            check(((Integer) norm.invoke(g2, new Object[] {new Integer(-7)})).intValue() == 12,
+                    "pause still works with no key names at all");
+            check(((Integer) norm.invoke(g2, new Object[] {new Integer(50)})).intValue() == 0,
+                    "numeric keypad works with no key names at all");
+        } finally {
+            javax.microedition.lcdui.Canvas.rejectAllVendorNames = false;
+        }
+        Save.clear();
+        System.out.println("  J2ME Loader startup: ok (unknown keycode -9 tolerated)");
+    }
+
+    /** Ширина коридоров, залы, связность и место для манёвра тварей. */
     private static void testCorridors() {
-        double worst = 1.0;
-        int mostBlocks = 0;
+        double worstWide = 1.0, worstSide = 1.0, fewestWalls = 1.0, worstMonN = 99.0;
+        int fewestBlocks = 1 << 30, mostBlocks = 0;
         for (int n = 0; n < 60; n++) {
             Level lv = new Level(0x1a2b000 | (n * 37 + 11),
                     540 + (n * 7) % 46, n % 13);
-            int floors = 0, corridor = 0, blocks3x3 = 0;
+            lv.computeDist(lv.startX, lv.startY);
+            int floors = 0, walls = 0, wide = 0, side = 0, blocks3x3 = 0, unreachable = 0;
             for (int y = 1; y < lv.h - 1; y++) {
                 for (int x = 1; x < lv.w - 1; x++) {
-                    if (lv.tile[lv.idx(x, y)] != Level.FLOOR) continue;
+                    int i = lv.idx(x, y);
+                    if (lv.tile[i] != Level.FLOOR) { walls++; continue; }
                     floors++;
-                    int nb = 0;
-                    if (lv.tile[lv.idx(x - 1, y)] == Level.FLOOR) nb++;
-                    if (lv.tile[lv.idx(x + 1, y)] == Level.FLOOR) nb++;
-                    if (lv.tile[lv.idx(x, y - 1)] == Level.FLOOR) nb++;
-                    if (lv.tile[lv.idx(x, y + 1)] == Level.FLOOR) nb++;
-                    if (nb <= 2) corridor++;
+                    if (lv.dist[i] < 0) unreachable++;
+                    int open9 = 0, deg = 0;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            if (lv.tile[lv.idx(x + dx, y + dy)] == Level.FLOOR) open9++;
+                        }
+                    }
+                    for (int k = 0; k < 4; k++) {
+                        int nx = x + (k == 0 ? 1 : (k == 1 ? -1 : 0));
+                        int ny = y + (k == 2 ? 1 : (k == 3 ? -1 : 0));
+                        if (lv.tile[lv.idx(nx, ny)] == Level.FLOOR) deg++;
+                    }
+                    if (open9 >= 5) wide++;   // двуклеточный проход, а не щель
+                    if (deg >= 3) side++;     // есть клетка для шага вбок
                 }
             }
             for (int y = 1; y < lv.h - 2; y++) {
@@ -466,16 +529,43 @@ public final class SelfTest {
                     if (all) blocks3x3++;
                 }
             }
-            double ratio = floors == 0 ? 0 : (double) corridor / floors;
-            if (ratio < worst) worst = ratio;
+            double monN = 0;
+            for (int i = 0; i < lv.monsterCount; i++) {
+                Monster m = lv.monsters[i];
+                for (int k = 0; k < 4; k++) {
+                    int nx = m.tileX + (k == 0 ? 1 : (k == 1 ? -1 : 0));
+                    int ny = m.tileY + (k == 2 ? 1 : (k == 3 ? -1 : 0));
+                    if (!lv.isWall(nx, ny)) monN++;
+                }
+            }
+            monN /= lv.monsterCount;
+            double wideR = floors == 0 ? 0 : (double) wide / floors;
+            double sideR = floors == 0 ? 0 : (double) side / floors;
+            double wallR = (double) walls / ((lv.w - 2) * (lv.h - 2));
+            if (wideR < worstWide) worstWide = wideR;
+            if (sideR < worstSide) worstSide = sideR;
+            if (wallR < fewestWalls) fewestWalls = wallR;
+            if (monN < worstMonN) worstMonN = monN;
+            if (blocks3x3 < fewestBlocks) fewestBlocks = blocks3x3;
             if (blocks3x3 > mostBlocks) mostBlocks = blocks3x3;
-            check(ratio >= 0.70, "level " + n + ": corridor ratio " +
-                    (int) (ratio * 100) + "% is too open");
-            check(blocks3x3 <= 24, "level " + n + ": " + blocks3x3 +
-                    " open 3x3 halls");
+            check(wideR >= 0.80, "level " + n + ": only " +
+                    (int) (wideR * 100) + "% wide corridor cells");
+            check(sideR >= 0.78, "level " + n + ": only " +
+                    (int) (sideR * 100) + "% cells with a side step");
+            check(blocks3x3 >= 6, "level " + n + ": no hall for flanking");
+            check(blocks3x3 <= 80, "level " + n + ": " + blocks3x3 +
+                    " 3x3 halls, level is an open field");
+            check(wallR >= 0.18, "level " + n + ": only " +
+                    (int) (wallR * 100) + "% walls");
+            check(monN >= 2.0, "level " + n + ": monsters average " + monN +
+                    " free neighbours, no room to maneuver");
+            check(unreachable == 0, "level " + n + ": wide layout is disconnected");
         }
-        System.out.println("  corridors: ok, min " + (int) (worst * 100) +
-                "% narrow cells, max " + mostBlocks + " 3x3 halls");
+        System.out.println("  corridors: ok, min " + (int) (worstWide * 100) +
+                "% wide cells, " + (int) (worstSide * 100) +
+                "% side-step cells, " + fewestBlocks + ".." + mostBlocks +
+                " halls, min " + (int) (fewestWalls * 100) + "% walls, min " +
+                worstMonN + " free neighbours per monster");
     }
 
     /** Экран карты продвижения: 45 узлов из ROM, 13 колонок, 4 концовки. */
