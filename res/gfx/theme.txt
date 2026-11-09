@@ -1,0 +1,23 @@
+# GigaKhrushchyovka: open palette. Edit values and repack the JAR.
+# Format KEY=0xAARRGGBB (AA=FF opaque); 0xRRGGBB also works.
+# Lines starting with # are comments. Unknown keys are ignored.
+WHITE=0xfff0e6d0
+RED=0xffe05050
+PURPLE=0xffb952c7
+YELLOW=0xffd8cf40
+GREEN=0xff8ec06a
+DARK=0xff180e20
+GREY=0xff8d8e8e
+RED_DIM=0xff741a24
+RED_MID=0xffb02a34
+BLACK=0xff080406
+BG=0xff0d0812
+SCREEN_BG=0xff120a1a
+MAP_BG=0xff0b0610
+PANEL_BG=0xff140b1c
+FOG_NORMAL=0xff2a1036
+FOG_VB=0xff200000
+CROSSHAIR=0xffe05050
+CROSSHAIR_HOT=0xffd8cf40
+# Example of the short form: alpha FF is added automatically.
+EXAMPLE_RGB=0x123456

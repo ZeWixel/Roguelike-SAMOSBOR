@@ -1,0 +1,11 @@
+object p Player
+object end
+
+object d Door
+texture door.png
+texture side 6.png
+object end
+
+object c Column
+texture 0.png
+object end

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Гигахрущёвка: САМОСБОР — J2ME превью</title>
+<style>
+  :root { --bg:#0b0710; --panel:#180e20; --line:#611c6d; --red:#e05050;
+          --purple:#b952c7; --yellow:#d8cf40; --txt:#f0e6d0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font:14px/1.4 "Courier New",monospace; }
+  .wrap { display:flex; gap:20px; flex-wrap:wrap; justify-content:center;
+          padding:18px; max-width:1100px; margin:0 auto; }
+  .left { flex:0 0 480px; max-width:100%; }
+  h1 { color:var(--purple); font-size:22px; margin:0 0 4px; letter-spacing:1px; }
+  .sub { color:var(--red); margin-bottom:12px; font-size:12px; }
+  #screen { width:480px; max-width:100%; height:640px; display:block;
+            border:2px solid var(--line); image-rendering:pixelated;
+            background:#000; box-shadow:0 0 30px #3a1048; }
+  .right { flex:1 1 320px; min-width:280px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          padding:12px; margin-bottom:12px; }
+  .card h2 { font-size:13px; color:var(--yellow); margin:0 0 8px;
+             text-transform:uppercase; letter-spacing:1px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  td { padding:3px 4px; border-bottom:1px solid #2a1836; }
+  td:first-child { color:var(--purple); white-space:nowrap; width:48%; }
+  .key { display:inline-block; border:1px solid var(--purple); padding:0 5px;
+         margin-right:3px; color:var(--yellow); }
+  .pad { display:grid; grid-template-columns:repeat(3,64px);
+         grid-template-rows:repeat(3,46px); gap:5px; justify-content:center;
+         margin-top:8px; }
+  .pad button { background:#261530; color:var(--txt); border:1px solid var(--line);
+                font:16px monospace; cursor:pointer; touch-action:none; }
+  .pad button:active { background:var(--purple); color:#000; }
+  .pad .empty { visibility:hidden; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .row button { flex:1 1 90px; padding:9px 4px; background:#261530;
+                color:var(--yellow); border:1px solid var(--line);
+                font:12px monospace; cursor:pointer; touch-action:none; }
+  .row button.hot { background:#4a1b56; color:#fff; border-color:var(--yellow); }
+  .row button:active { background:var(--purple); color:#000; }
+  .note { color:#9a8ca8; font-size:11px; margin-top:10px; }
+  .badge { display:inline-block; background:#2a1836; border:1px solid var(--line);
+           padding:2px 6px; margin:2px; color:var(--purple); font-size:11px; }
+  #snd { width:100%; margin-top:8px; padding:8px; background:#261530;
+         color:var(--green,#8ec06a); border:1px solid var(--line);
+         font:12px monospace; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <h1>ГИГАХРУЩЁВКА: САМОСБОР</h1>
+    <div class="sub">J2ME / MIDP 2.0 / MMAPI · рейкастинг · превью работает на том же Java-коде</div>
+    <canvas id="screen" width="480" height="640"></canvas>
+  </div>
+  <div class="right">
+    <div class="card">
+      <h2>Управление (как Insmouse no Yakata)</h2>
+      <table>
+        <tr><td>меню: перелистывание</td><td><span class="key">2</span><span class="key">8</span> / <span class="key">↑</span><span class="key">↓</span></td></tr>
+        <tr><td>меню: выбрать</td><td><span class="key">5</span> / <span class="key">Space</span></td></tr>
+        <tr><td>меню: значение / назад</td><td><span class="key">4</span><span class="key">6</span><span class="key">1</span><span class="key">3</span> / <span class="key">9</span></td></tr>
+        <tr><td><b>7 достать оружие → прицел</b></td><td><span class="key">7</span> / <span class="key">G</span></td></tr>
+        <tr><td>ходьба: шаг / поворот 90°</td><td><span class="key">2</span><span class="key">8</span> / <span class="key">4</span><span class="key">6</span></td></tr>
+        <tr><td><b>стрейф влево / вправо</b></td><td><span class="key">1</span> / <span class="key">3</span></td></tr>
+        <tr><td>в прицеле: 2/4/6/8</td><td><span class="key">↑</span><span class="key">←</span><span class="key">↓</span><span class="key">→</span></td></tr>
+        <tr><td>огонь / перезарядка</td><td><span class="key">5</span><span class="key">Space</span> / <span class="key">0</span><span class="key">R</span></td></tr>
+        <tr><td>очки Virtual Boy / карта</td><td><span class="key">*</span><span class="key">V</span> / <span class="key">#</span><span class="key">M</span></td></tr>
+        <tr><td><b>меню паузы (прав. софт)</b></td><td><span class="key">P</span><span class="key">F2</span> / кнопка ниже</td></tr>
+        <tr><td>карта продвижения (превью)</td><td><span class="key">N</span> / кнопка ниже</td></tr>
+      </table>
+      <div class="note">Без оружия 2/8 — шаг на клетку, 4/6 — поворот на 90°,
+        1/3 — стрейф. Логика шагает сразу, а камера доезжает за 230 мс
+        (плавно, как доворот). С оружием 2/4/6/8 двигают прицел, 1/3 всё ещё
+        стрейфят, 5 стреляет. В меню 1/3 меняют значение пункта.</div>
+      <div class="pad">
+        <button class="empty"></button><button data-k="50">2 ▲</button><button class="empty"></button>
+        <button data-k="52">4 ◄</button><button data-k="53">5</button><button data-k="54">6 ►</button>
+        <button class="empty"></button><button data-k="56">8 ▼</button><button class="empty"></button>
+      </div>
+      <div class="row">
+        <button class="hot" data-k="55">7 ОРУЖИЕ</button>
+        <button data-k="53">ОГОНЬ</button><button data-k="48">0 ЗАРЯД</button>
+      </div>
+      <div class="row">
+        <button data-k="42">* VB</button><button data-k="35"># КАРТА</button>
+        <button data-k="49">1 ◄ СТРЕЙФ</button><button data-k="51">3 ► СТРЕЙФ</button><button data-k="57">9</button>
+      </div>
+      <div class="row">
+        <button class="hot" data-k="-7">ПРАВ. СОФТ — ПАУЗА</button>
+        <button data-k="99">КАРТА ПУТИ</button>
+      </div>
+      <button id="snd">▶ ВКЛЮЧИТЬ ЗВУК (WebAudio-эффекты)</button>
+    </div>
+    <div class="card">
+      <h2>Что внутри</h2>
+      <div class="badge">процедурные этажи</div>
+      <div class="badge">твари из частей тела</div>
+      <div class="badge">таймер Самосбора</div>
+      <div class="badge">пропуск + гермодверь</div>
+      <div class="badge">белый/чёрный шар</div>
+      <div class="badge">13 этажей</div>
+      <div class="badge">4 концовки</div>
+      <div class="badge">MIDI музыка + SFX</div>
+      <div class="badge">RMS автосейв</div>
+      <div class="badge">красный режим VB</div>
+      <div class="badge">открытые PNG-ресурсы</div>
+      <div class="badge">стрейф 1/3</div>
+      <div class="note"><b>Вся графика — обычные PNG внутри JAR.</b> Распакуйте
+        <b>dist/GigaKhrushchyovka.jar</b>, отредактируйте <b>gfx/weapon.png</b>,
+        <b>textures/beton.png</b> или <b>gfx/theme.txt</b> и выполните
+        <b>python3 tools/repack.py</b> — перекомпиляция не нужна. Манифест:
+        <b>RESOURCES.md</b>.</div>
+      <div class="note">Движок: Mecasting (Роман Лагин) + LLM-J2ME-SUITE.
+        Сборка JAR: <b>./build.sh</b>. В превью играет скомпилированный
+        <b>samosbor.Game</b> на заглушках MIDP/MMAPI/RMS, а не JS-порт.
+        MIDI звучит на телефоне; здесь эффекты дублируются WebAudio.</div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d');
+  ctx.imageSmoothingEnabled=false;
+  // Клавиши браузера -> коды J2ME (цифры = KEY_NUMx).
+  const MAP={
+    'w':[50],'ArrowUp':[50],'2':[50],
+    's':[56],'ArrowDown':[56],'8':[56],
+    'a':[52],'ArrowLeft':[52],'4':[52],
+    'd':[54],'ArrowRight':[54],'6':[54],
+    'g':[55],'7':[55],
+    ' ':[53],'f':[53],'Enter':[53],'5':[53],
+    'r':[48],'0':[48],
+    'v':[42],'*':[42],
+    'm':[35],'#':[35],'Escape':[35],
+    'p':[-7],'F2':[-7],
+    'n':[99],
+    '1':[49],'3':[51],'9':[57]
+  };
+  const down=new Set();
+  function send(code,state){
+    fetch('/key?k='+code+'&d='+(state?1:0)).catch(()=>{});
+  }
+  function press(codes){ for(const c of codes){ if(!down.has(c)){down.add(c);send(c,1);} } }
+  function release(codes){ for(const c of codes){ if(down.has(c)){down.delete(c);send(c,0);} } }
+  window.addEventListener('keydown',e=>{
+    let k=e.key; if(k.length===1) k=k.toLowerCase();
+    const codes=MAP[k]; if(!codes) return;
+    e.preventDefault(); press(codes);
+  });
+  window.addEventListener('keyup',e=>{
+    let k=e.key; if(k.length===1) k=k.toLowerCase();
+    const codes=MAP[k]; if(!codes) return;
+    e.preventDefault(); release(codes);
+  });
+  window.addEventListener('blur',()=>{ for(const c of Array.from(down)) send(c,0); down.clear(); });
+  document.querySelectorAll('button[data-k]').forEach(b=>{
+    const c=parseInt(b.dataset.k,10);
+    const on=e=>{e.preventDefault(); if(!down.has(c)){down.add(c);send(c,1);}};
+    const off=e=>{e.preventDefault(); if(down.has(c)){down.delete(c);send(c,0);}};
+    b.addEventListener('touchstart',on,{passive:false});
+    b.addEventListener('touchend',off,{passive:false});
+    b.addEventListener('touchcancel',off,{passive:false});
+    b.addEventListener('mousedown',on);
+    b.addEventListener('mouseup',off);
+    b.addEventListener('mouseleave',off);
+  });
+  const img=new Image();
+  img.onload=()=>{ ctx.imageSmoothingEnabled=false;
+                   ctx.drawImage(img,0,0,canvas.width,canvas.height); };
+  function frame(){ img.src='/frame.png?t='+Date.now(); }
+  setInterval(frame,50);
+  frame();
+
+  // ---------------- WebAudio: MIDI-эффекты дублируются синтезатором --------
+  let ac=null,lastAt=0,drone=null,droneMode='';
+  const TONES={
+    'shot.mid':[110,0.09,'square',0.16], 'hit.mid':[320,0.10,'sawtooth',0.11],
+    'kill.mid':[180,0.22,'triangle',0.13], 'pickup.mid':[660,0.16,'sine',0.12],
+    'door.mid':[240,0.20,'triangle',0.11], 'hurt.mid':[90,0.26,'sawtooth',0.15],
+    'siren.mid':[440,0.55,'sawtooth',0.10], 'menu.mid':[520,0.05,'square',0.06],
+    'step.mid':[70,0.045,'triangle',0.05], 'draw.mid':[300,0.09,'square',0.09],
+    'reload.mid':[210,0.12,'square',0.09],
+    'breach.mid':[55,0.34,'sawtooth',0.17]
+  };
+  function tone(freq,dur,type,vol,slide){
+    if(!ac||ac.state!=='running') return;
+    const o=ac.createOscillator(), g=ac.createGain(), t=ac.currentTime;
+    o.type=type; o.frequency.setValueAtTime(freq,t);
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,slide),t+dur);
+    g.gain.setValueAtTime(vol,t);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+dur+0.02);
+  }
+  function noise(dur,vol){
+    if(!ac||ac.state!=='running') return;
+    const n=Math.floor(ac.sampleRate*dur), b=ac.createBuffer(1,n,ac.sampleRate);
+    const d=b.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2);
+    const s=ac.createBufferSource(), g=ac.createGain(), f=ac.createBiquadFilter();
+    s.buffer=b; f.type='lowpass'; f.frequency.value=1800;
+    g.gain.value=vol; s.connect(f); f.connect(g); g.connect(ac.destination); s.start();
+  }
+  function sfx(name){
+    const p=TONES[name]; if(!p) return;
+    if(name==='shot.mid'){ noise(0.11,0.20); tone(150,0.13,'square',0.09,55); return; }
+    if(name==='breach.mid'){ noise(0.30,0.22); tone(70,0.32,'sawtooth',0.13,40); return; }
+    if(name==='siren.mid'){ tone(440,0.4,'sawtooth',0.08,660); tone(660,0.4,'sawtooth',0.06,440); return; }
+    if(name==='pickup.mid'){ tone(440,0.09,'sine',0.10); setTimeout(()=>tone(880,0.12,'sine',0.10),80); return; }
+    tone(p[0],p[1],p[2],p[3],name==='hurt.mid'?45:0);
+  }
+  function setDrone(mode){
+    if(!ac||mode===droneMode) return;
+    if(drone){ try{drone.o.stop();drone.l.stop();drone.g.disconnect();}catch(e){} drone=null; }
+    droneMode=mode;
+    if(!mode) return;
+    const t=ac.currentTime, o=ac.createOscillator(), l=ac.createOscillator(),
+          g=ac.createGain(), lg=ac.createGain();
+    o.type='sawtooth'; o.frequency.value=mode==='danger'?72:55;
+    l.type='sine'; l.frequency.value=mode==='danger'?2.8:0.45;
+    lg.gain.value=mode==='danger'?18:9;
+    l.connect(lg); lg.connect(o.frequency);
+    g.gain.value=0.0001; g.gain.linearRampToValueAtTime(mode==='danger'?0.035:0.022,t+0.6);
+    o.connect(g); g.connect(ac.destination); o.start(t); l.start(t);
+    drone={o:o,l:l,g:g,lg:lg};
+  }
+  document.getElementById('snd').addEventListener('click',async e=>{
+    if(!ac) ac=new (window.AudioContext||window.webkitAudioContext)();
+    await ac.resume();
+    e.target.textContent='♪ ЗВУК ВКЛЮЧЁН';
+    tone(660,0.08,'sine',0.08);
+  });
+  setInterval(()=>{
+    fetch('/events?t='+Date.now()).then(r=>r.json()).then(v=>{
+      if(v.at && v.at>lastAt){ lastAt=v.at; sfx(v.event); }
+      setDrone(v.music||'');
+    }).catch(()=>{});
+  },100);
+})();
+</script>
+</body>
+</html>
