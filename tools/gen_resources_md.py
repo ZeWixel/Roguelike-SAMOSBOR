@@ -42,8 +42,11 @@ GROUPS = [
      lambda j: j.startswith('textures/') and not any(k in j for k in ('skin', 'beast'))),
     ('Фото-основы спрайтов (`textures/skin*`, `textures/beast*`, 40x56)',
      lambda j: j.startswith('textures/') and any(k in j for k in ('skin', 'beast'))),
+    ('Модульные монстры (`gfx/parts/*.png`, полоски 240x56)',
+     lambda j: j.startswith('gfx/parts/') and j.endswith('.png')),
     ('Спрайты и интерфейс (`gfx/*.png`)',
-     lambda j: j.startswith('gfx/') and '/source/' not in j and j.endswith('.png')),
+     lambda j: j.startswith('gfx/') and '/source/' not in j
+               and '/parts/' not in j and j.endswith('.png')),
     ('Исходные фото-основы (`gfx/source/*.png`)',
      lambda j: j.startswith('gfx/source/')),
     ('Палитра и документация (`gfx/*.txt`)',
@@ -68,6 +71,17 @@ for i, label in enumerate(ITEMS, 1):
     PURPOSE['gfx/item-%d.png' % i] = 'спрайт предмета: %s' % label
 for i in range(3):
     PURPOSE['gfx/title-%d.png' % i] = 'тварь №%d на титульном экране и в концовках' % (i + 1)
+PART_NAMES = {
+    'body': 'основная фото-часть тела (общий силуэт)',
+    'shadow': 'тень / фиолетовая лужа под тварью',
+    'back': 'задние щупальца и спинные детали',
+    'legs': 'ноги, лапы, корни или колёса',
+    'armL': 'ЛЕВАЯ конечность с когтями (двигается отдельно)',
+    'armR': 'ПРАВАЯ конечность с когтями (своя фаза анимации)',
+    'torso': 'торс, бочка, панель или клеть',
+    'head': 'голова и пасть / глаза',
+    'front': 'передние наросты, слизь, ореол',
+}
 SCREEN_NAMES = {
     'title': 'главное меню', 'help': 'управление', 'brief': 'брифинг этажа',
     'ending': 'концовка', 'dead': 'гибель', 'progress': 'карта продвижения',
@@ -77,6 +91,11 @@ SCREEN_NAMES = {
 def purpose(jar):
     if jar in PURPOSE:
         return PURPOSE[jar]
+    if jar.startswith('gfx/parts/'):
+        base = os.path.basename(jar)[:-4]
+        kind, pal = base.rsplit('-', 1)
+        return '%s, палитра %s; 6 вариантов в полоске, при смерти разлетается отдельно' % (
+            PART_NAMES.get(kind, kind), pal)
     if jar.startswith('textures/') and not any(k in jar for k in ('skin', 'beast')):
         return 'текстура стены/пола/потолка'
     if jar.startswith('textures/'):
@@ -97,7 +116,9 @@ out.append('Вся графика и звук игры лежат **внутри
            'Никаких скрытых атласов или спрайтов, зашитых в байт-код: всё, что видит игра,\n'
            'лежит отдельными файлами. Разархивировал JAR, отредактировал PNG/TXT в любом\n'
            'редакторе, запаковал обратно — игра подхватит изменения без `javac`, ProGuard\n'
-           'и пересборки.\n')
+           'и пересборки. Твари тоже **модульные**: `gfx/parts/` содержит девять\n'
+           'отдельных частей тела x 4 палитры, когти анимируются независимо, а при\n'
+           'смерти те же фрагменты разлетаются.\n')
 out.append('\n## Как редактировать\n')
 out.append('```sh\n'
            '# 1. распаковать готовый JAR\n'
@@ -116,6 +137,9 @@ out.append('Альтернатива: править файлы прямо в `r
            'запускаются только при первом клоне или по `./build.sh --regen-art`.\n')
 out.append('\nПравила:\n\n'
            '* сохраняйте **размер в пикселях** у каждого файла (список ниже);\n'
+           '* `gfx/parts/*.png` — полоски 240x56: шесть ячеек 40x56 подряд,\n'
+           '  одна часть тела, один вариант на ячейку; альфа разделяет модули,\n'
+           '  поэтому когти можно двигать/заменять по отдельности;\n'
            '* `alpha = 0` — прозрачный пиксель, `alpha = 255` — непрозрачный;\n'
            '* `gfx/theme.txt` — строки `KEY=0xAARRGGBB`, `#` — комментарий,\n'
            '  допустим и короткий вид `0xRRGGBB` (альфа `FF` добавляется сама);\n'
@@ -145,7 +169,9 @@ out.append('\n`gfx/screen-play.png` и `gfx/screen-pause.png` **не** пост�
            'Поддерживаются все 8 имён: `title`, `help`, `brief`, `play`,\n'
            '`ending`, `dead`, `pause`, `progress`.\n')
 out.append('\n## Технически\n')
-out.append('`src/samosbor/Gfx.java` грузит PNG через `Image.createImage()` →\n'
+out.append('`src/samosbor/MonsterRig.java` собирает тварь из девяти `Raster`\n'
+           'и меняет только смещения частей, а не перерисовывает целый спрайт.\n'
+           '`src/samosbor/Gfx.java` грузит PNG через `Image.createImage()` →\n'
            '`Texture.loadPixels()` (без лишнего массива `vb` для больших пластин),\n'
            'читает `theme.txt` потоком `Class.getResourceAsStream()` и кэширует\n'
            'результат. Фоновые пластины грузятся лениво, в памяти живёт только одна.\n'

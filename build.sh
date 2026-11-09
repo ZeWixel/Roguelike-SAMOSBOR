@@ -4,6 +4,7 @@
 #
 #   ./build.sh               — обычная сборка; НЕ перезаписывает графику в res/
 #   ./build.sh --regen-art   — заново сгенерировать PNG/MIDI/шрифт/атлас
+#                              (включая 36 полосок модульных монстров)
 #
 # Все ресурсы открыты: они лежат в res/ и копируются в JAR как есть.
 # После ручной правки PNG достаточно python3 tools/repack.py — без javac.
@@ -98,6 +99,18 @@ if [ "$REGEN" = 1 ] || [ ! -f res/gfx/weapon.png ] || [ ! -f res/gfx/theme.txt ]
     "$JAVA" -cp "$BUILD/preview:$ROOT/res" samosbor.ExportGfx "$ROOT/res/gfx"
 else
     echo "==> res/gfx/ уже есть, используем отредактированные PNG"
+    # Новые модули доэкспортируются ПО ОДНОМУ: существующие файлы не трогаем.
+    parts=0
+    for k in body shadow back legs armL armR torso head front; do
+        for p in 0 1 2 3; do
+            [ -f "res/gfx/parts/$k-$p.png" ] || parts=$((parts + 1))
+        done
+    done
+    if [ "$parts" -gt 0 ]; then
+        echo "==> Доэкспорт $parts недостающих полосок модульных монстров"
+        "$JAVA" -cp "$BUILD/preview:$ROOT/res" samosbor.ExportGfx \
+            "$ROOT/res/gfx" --parts-only
+    fi
 fi
 
 echo "==> Ресурсы"
@@ -119,7 +132,7 @@ Created-By: GigaKhrushchyovka build.sh (J2ME)
 MIDlet-1: GigaKhrushchyovka,,samosbor.Main
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.6.0
+MIDlet-Version: 1.7.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
@@ -136,7 +149,7 @@ MIDlet-Jar-Size: $SIZE
 MIDlet-Jar-URL: GigaKhrushchyovka.jar
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.6.0
+MIDlet-Version: 1.7.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0

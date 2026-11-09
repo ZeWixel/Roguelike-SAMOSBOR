@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
  *  - 60 процедурных этажей: связность, доступность ключа/гермодвери, расстановка;
  *  - автосохранение RMS: снимок, восстановление уровня/тварей, «продолжить»;
  *  - спрайты монстров из всех видов частей тела;
+ *  - МОДУЛЬНЫЙ спрайт: девять отдельных частей, независимые когти, разлёт при смерти;
  *  - новый ИИ: телеграфированный укус, 1 сердце, толчок не ранит;
  *  - старт на J2ME Loader: getKeyName() бросает «unknown keycode -9»;
  *  - квадратный тайл 1:1, одноклеточные коридоры, квартиры за дверями;
@@ -26,6 +27,7 @@ public final class SelfTest {
         testLevels();
         testSave();
         testMonsters();
+        testModularMonsters();
         testEnemyAI();
         testPauseAndCrosshair();
         testRomMechanics();
@@ -189,13 +191,15 @@ public final class SelfTest {
         int nonEmpty = 0;
         for (int i = 0; i < 240; i++) {
             Monster m = Monster.create(r, i % 13);
+            Raster snap = m.snapshot();
             boolean hasPixels = false;
-            for (int k = 0; k < m.frames[0].p.length; k++) {
-                if ((m.frames[0].p[k] >>> 24) != 0) { hasPixels = true; break; }
+            for (int k = 0; k < snap.p.length; k++) {
+                if ((snap.p[k] >>> 24) != 0) { hasPixels = true; break; }
             }
             if (hasPixels) nonEmpty++;
-            check(m.frames[0].vb != null && m.frames[1].vb != null,
-                    "monster " + i + ": VB variant missing");
+            check(m.rig != null && m.rig.piece.length == MonsterRig.PARTS,
+                    "monster " + i + ": modular rig missing");
+            check(snap.vb != null, "monster " + i + ": VB variant missing");
             check(m.name.length() > 2 && m.hp > 0 && m.speedMs > 0,
                     "monster " + i + ": bad stats");
             check(m.description().indexOf("/") > 0, "monster " + i + ": no parts description");
@@ -206,7 +210,205 @@ public final class SelfTest {
                     "monster " + i + ": slow, short-sighted AI stats");
         }
         check(nonEmpty == 240, "all generated monsters have visible pixels");
-        System.out.println("  monsters: ok (" + nonEmpty + " sprites)");
+        System.out.println("  monsters: ok (" + nonEmpty + " modular sprites)");
+    }
+
+    /**
+     * Insmouse no Yakata: тварь = набор независимых графических элементов,
+     * а не один цельный bitmap. Когти живут своей анимацией, а смерть
+     * запускает разлёт отдельных фрагментов.
+     */
+    private static void testModularMonsters() throws Exception {
+        Rng r = new Rng(0x6d0d);
+        int movingClaws = 0, scattered = 0;
+        for (int i = 0; i < 48; i++) {
+            Monster m = Monster.create(r, i % 13);
+            MonsterRig rig = m.rig;
+            check(rig != null, "modular monster " + i + ": no rig");
+            if (rig == null) continue;
+            int pieces = 0;
+            for (int k = 0; k < MonsterRig.PARTS; k++) {
+                if (rig.piece[k] != null) pieces++;
+            }
+            check(pieces >= 7, "monster " + i + ": must be built from separate parts (" + pieces + ")");
+            check(rig.piece[MonsterRig.BODY] != null, "monster " + i + ": missing body module");
+            check(rig.piece[MonsterRig.HEAD] != null, "monster " + i + ": missing head/mouth module");
+            check(rig.piece[MonsterRig.ARM_L] != null &&
+                    rig.piece[MonsterRig.ARM_R] != null,
+                    "monster " + i + ": missing limb/claw modules");
+            check(rig.piece[MonsterRig.ARM_L] != rig.piece[MonsterRig.ARM_R],
+                    "monster " + i + ": left and right claws must be different Rasters");
+            Raster snap = rig.snapshot();
+            boolean visible = false;
+            for (int k = 0; k < snap.p.length; k++) {
+                if ((snap.p[k] >>> 24) != 0) { visible = true; break; }
+            }
+            check(visible && snap.vb != null,
+                    "monster " + i + ": assembled snapshot is visible");
+
+            // Когти двигаются собственной волной и не повторяют друг друга.
+            rig.animate(100000L, m);
+            int lx1 = rig.dx[MonsterRig.ARM_L], ly1 = rig.dy[MonsterRig.ARM_L];
+            int rx1 = rig.dx[MonsterRig.ARM_R], ry1 = rig.dy[MonsterRig.ARM_R];
+            rig.animate(100280L, m);
+            boolean moved = lx1 != rig.dx[MonsterRig.ARM_L] ||
+                            ly1 != rig.dy[MonsterRig.ARM_L] ||
+                            rx1 != rig.dx[MonsterRig.ARM_R] ||
+                            ry1 != rig.dy[MonsterRig.ARM_R];
+            if (moved) movingClaws++;
+            check(moved, "monster " + i + ": claws animate independently in idle");
+            check((rig.dx[MonsterRig.ARM_L] - lx1) != (rig.dx[MonsterRig.ARM_R] - rx1) ||
+                    (rig.dy[MonsterRig.ARM_L] - ly1) != (rig.dy[MonsterRig.ARM_R] - ry1),
+                    "monster " + i + ": left/right claws are not one rigid sprite");
+            m.windupUntil = 101000L;
+            rig.animate(100280L, m);
+            check(rig.dy[MonsterRig.ARM_L] < 0 && rig.dy[MonsterRig.ARM_R] < 0,
+                    "monster " + i + ": windup lifts both claws");
+            m.windupUntil = 0;
+
+            // Смерть = разлёт, а не alive=false в тот же кадр.
+            m.startDeath(200000L, i * 7919 + 17);
+            check(m.dying && m.alive && m.hp == 0,
+                    "monster " + i + ": death starts a visible destruction sequence");
+            check(m.deathUntil == 200000L + MonsterRig.DEATH_MS,
+                    "monster " + i + ": death sequence has a finite timer");
+            rig.animate(200000L, m);
+            int hx0 = rig.dx[MonsterRig.HEAD], hy0 = rig.dy[MonsterRig.HEAD];
+            rig.animate(200450L, m);
+            boolean flew = rig.dx[MonsterRig.HEAD] != hx0 ||
+                           rig.dy[MonsterRig.HEAD] != hy0 ||
+                           rig.dx[MonsterRig.TORSO] != 0 ||
+                           rig.dy[MonsterRig.TORSO] != 0;
+            if (flew) scattered++;
+            check(flew, "monster " + i + ": parts fly apart on death");
+            check(!m.finishDeath(200450L),
+                    "monster " + i + ": death cannot finish mid-flight");
+            check(m.finishDeath(200000L + MonsterRig.DEATH_MS),
+                    "monster " + i + ": death finishes after the scatter timer");
+            check(!m.alive && !m.dying, "monster " + i + ": corpse becomes dead after scatter");
+
+            // Сейв в середине разлёта восстанавливает те же траектории.
+            Monster dying = Monster.create(r, i % 13);
+            dying.respawnAt = 300000L;
+            dying.startDeath(200000L, i * 104729 + 3);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+            dying.write(out);
+            out.flush();
+            java.io.DataInputStream in = new java.io.DataInputStream(
+                    new java.io.ByteArrayInputStream(bos.toByteArray()));
+            Monster restored = Monster.restore(in);
+            check(restored.dying && restored.hp == 0 && restored.alive,
+                    "monster " + i + ": mid-death RMS state is restored");
+            check(restored.deathStart == dying.deathStart &&
+                    restored.deathUntil == dying.deathUntil,
+                    "monster " + i + ": death timer survives save/load");
+            boolean sameFlight = true;
+            for (int k = 0; k < MonsterRig.PARTS; k++) {
+                if (restored.rig.flyX[k] != dying.rig.flyX[k] ||
+                        restored.rig.flyY[k] != dying.rig.flyY[k]) {
+                    sameFlight = false; break;
+                }
+            }
+            check(sameFlight, "monster " + i + ": fragment trajectories survive save/load");
+        }
+        check(movingClaws == 48, "every generated monster animates claws separately");
+        check(scattered == 48, "every generated monster scatters into fragments");
+
+        // Открытые PNG модулей: все 9 частей x 4 палитры действительно лежат в res/.
+        int loadedStrips = 0;
+        for (int p = 0; p < 4; p++) {
+            for (int k = 0; k < MonsterRig.PARTS; k++) {
+                Raster part = Gfx.part(p, k, k == MonsterRig.BODY ? 0 : 2);
+                if (part != null) loadedStrips++;
+            }
+        }
+        check(loadedStrips >= 32,
+                "gfx/parts/*.png supply separate monster modules (" + loadedStrips + "/36)");
+
+        // Один логический хитбокс на тварь + разлёт после выстрела.
+        Save.clear();
+        BufferedImage img = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
+        Graphics gfx = new Graphics(img);
+        Game g = new Game(null);
+        tap(g, 53); tap(g, 53);                      // НОВЫЙ ЗАБЕГ -> PLAY
+        Field fLevel = field(Game.class, "level");
+        Field fRenderer = field(Game.class, "renderer");
+        Field fTx = field(Game.class, "playerTX");
+        Field fTy = field(Game.class, "playerTY");
+        Field fPosX = field(Game.class, "posX");
+        Field fPosY = field(Game.class, "posY");
+        Field fDirDeg = field(Game.class, "dirDeg");
+        Field fAiming = field(Game.class, "aiming");
+        Field fAimX = field(Game.class, "aimX");
+        Field fAimY = field(Game.class, "aimY");
+        Field fMag = field(Game.class, "magazine");
+        Field fNextDist = field(Game.class, "nextDistCompute");
+        Field fNextResp = field(Game.class, "nextRespawnCheck");
+        Renderer rr = (Renderer) fRenderer.get(g);
+        Level lv = (Level) fLevel.get(g);
+        int px = fTx.getInt(g), py = fTy.getInt(g);
+        fPosX.setInt(g, px * 4096 + 2048);
+        fPosY.setInt(g, py * 4096 + 2048);
+        int[] vx = {-1, 0, 1, 0}, vy = {0, -1, 0, 1}, deg = {0, 90, 180, 270};
+        int mx = px, my = py;
+        Method setVectors = method(Game.class, "setVectors", new Class[0]);
+        for (int k = 0; k < 4; k++) {
+            int nx = px + vx[k], ny = py + vy[k];
+            int n2x = px + vx[k] * 2, n2y = py + vy[k] * 2;
+            if (lv.isBlocking(nx, ny) || lv.isBlocking(n2x, n2y)) continue;
+            fDirDeg.setInt(g, deg[k]);
+            setVectors.invoke(g, new Object[0]);
+            mx = n2x; my = n2y;
+            break;
+        }
+        check(mx != px || my != py, "found a two-cell corridor for the modular render test");
+        Monster target = lv.monsters[0];
+        target.place(mx, my);
+        for (int i = 1; i < lv.monsterCount; i++) lv.monsters[i].alive = false;
+        lv.markSeen(mx, my);
+        lv.markSeen(px, py);
+        Method renderFrame = method(Game.class, "renderFrame",
+                new Class[] {long.class});
+        long now = System.currentTimeMillis();
+        renderFrame.invoke(g, new Object[] {new Long(now)});
+        check(rr.sprCount == 1,
+                "nine drawn parts still register ONE aiming hitbox (" + rr.sprCount + ")");
+        check(rr.sprCount == 0 || rr.sprIndex[0] == 0,
+                "the hitbox points at the whole monster, not at a body part");
+        check(rr.sprRight[0] > rr.sprLeft[0] && rr.sprBottom[0] > rr.sprTop[0],
+                "modular monster keeps a 40x56-equivalent bounding box");
+
+        fAiming.setBoolean(g, true);
+        fMag.setInt(g, 6);
+        fAimX.setInt(g, (rr.sprLeft[0] + rr.sprRight[0]) / 2);
+        fAimY.setInt(g, (rr.sprTop[0] + rr.sprBottom[0]) / 2);
+        target.hp = 1;                              // один выстрел = смерть
+        fNextDist.setLong(g, Long.MAX_VALUE);
+        fNextResp.setLong(g, now + 30000);
+        Method fire = method(Game.class, "fire", new Class[] {long.class});
+        fire.invoke(g, new Object[] {new Long(now)});
+        check(target.dying && target.alive && target.hp == 0,
+                "a killing shot starts the fragment scatter instead of vanishing");
+        check(target.deathUntil == now + MonsterRig.DEATH_MS,
+                "scatter lasts MonsterRig.DEATH_MS");
+        Method updateMonsters = method(Game.class, "updateMonsters",
+                new Class[] {long.class, long.class});
+        updateMonsters.invoke(g, new Object[] {new Long(0), new Long(now + 450)});
+        renderFrame.invoke(g, new Object[] {new Long(now + 450)});
+        check(target.dying, "fragments keep updating during death");
+        check(rr.sprCount == 0, "scattered parts are not separate shooting targets");
+        boolean flewInGame = false;
+        for (int k = 0; k < MonsterRig.PARTS; k++) {
+            if (target.rig.dx[k] != 0 || target.rig.dy[k] != 0) { flewInGame = true; break; }
+        }
+        check(flewInGame, "in-game death actually moves the modules");
+        updateMonsters.invoke(g, new Object[] {
+                new Long(0), new Long(now + MonsterRig.DEATH_MS)});
+        check(!target.dying && !target.alive,
+                "after the scatter the monster becomes dead and can respawn");
+        Save.clear();
+        System.out.println("  modular monsters: ok (9 parts, claws, death scatter)");
     }
 
     /** Тварь не должна «выкашивать» игрока за секунду. */
@@ -343,11 +545,14 @@ public final class SelfTest {
         target.alive = true;
         Method fire = method(Game.class, "fire", new Class[] {long.class});
         int shots = 0;
-        while (target.alive && shots < 12) {
-            fire.invoke(g, new Object[] {new Long(System.currentTimeMillis())});
+        long killTime = System.currentTimeMillis();
+        while (!target.dying && shots < 12) {
+            fire.invoke(g, new Object[] {new Long(killTime)});
             shots++;
         }
-        check(!target.alive, "monster can be killed");
+        check(target.dying, "killing shot starts the modular death sequence");
+        target.finishDeath(killTime + MonsterRig.DEATH_MS);
+        check(!target.alive && !target.dying, "monster can be killed");
         check(shots == target.maxHp, "exactly maxHp bullets kill it (" + shots + "/" + target.maxHp + ")");
         check(shots >= 2 && shots <= 8, "bullet count within ROM's 2-8 range");
         r.sprCount = 0;
@@ -1087,12 +1292,14 @@ public final class SelfTest {
                 "gfx/weapon.png", "gfx/item-1.png", "gfx/item-6.png",
                 "gfx/font.png", "gfx/hud.png", "gfx/crosshair.png",
                 "gfx/overlay.png", "gfx/screen-title.png", "gfx/theme.txt",
-                "gfx/README.txt", "gfx/source/base_beast.png"
+                "gfx/README.txt", "gfx/source/base_beast.png",
+                "gfx/parts/body-0.png", "gfx/parts/head-3.png",
+                "gfx/parts/armL-0.png", "gfx/parts/front-2.png"
             };
             for (int i = 0; i < must.length; i++) {
                 check(z.getEntry(must[i]) != null, "JAR contains " + must[i]);
             }
-            int png = 0, mid = 0, txt = 0;
+            int png = 0, mid = 0, txt = 0, strips = 0;
             java.util.Enumeration en = z.entries();
             while (en.hasMoreElements()) {
                 java.util.zip.ZipEntry e =
@@ -1101,9 +1308,11 @@ public final class SelfTest {
                 if (n.endsWith(".png")) png++;
                 else if (n.endsWith(".mid")) mid++;
                 else if (n.endsWith(".txt")) txt++;
+                if (n.startsWith("gfx/parts/") && n.endsWith(".png")) strips++;
             }
             z.close();
-            check(png >= 55, "JAR ships all graphics as PNG (" + png + ")");
+            check(png >= 91, "JAR ships all graphics + 36 modular strips as PNG (" + png + ")");
+            check(strips == 36, "JAR ships 9 separate monster parts x 4 palettes (" + strips + ")");
             check(mid == 14, "JAR ships 14 MIDI files");
             check(txt >= 2, "JAR ships the palette and the resource README");
         }

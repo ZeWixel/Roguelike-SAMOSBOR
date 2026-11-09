@@ -8,6 +8,10 @@ import java.io.DataOutputStream;
  * Как в Insmouse no Yakata, твари не заранее нарисованы: каждая особь
  * собирается ГПСЧ из головы, торса, рук, ног и «лишней» детали.
  * Из частей же считаются HP, скорость, урон и имя.
+ *
+ * ВАЖНО: части теперь существуют как ОТДЕЛЬНЫЕ графические элементы,
+ * а не как один заранее склеенный спрайт. Их хранением, независимой
+ * анимацией когтей и разлётом при смерти занимается MonsterRig.
  */
 public final class Monster {
 
@@ -82,6 +86,15 @@ public final class Monster {
      *  - свечение глаз не трогаем: тварь читается и в Virtual Boy.
      */
     private static void applyPhotoSkin(Raster g, int palette) {
+        applyPhotoSkin(g, palette, true);
+    }
+
+    /** Только подмешивает фото в УЖЕ непрозрачные пиксели отдельной части. */
+    static void applyPhotoTint(Raster g, int palette) {
+        applyPhotoSkin(g, palette, false);
+    }
+
+    private static void applyPhotoSkin(Raster g, int palette, boolean expand) {
         ensurePhotos();
         int p = palette < 0 || palette > 3 ? 0 : palette;
         Texture s = skinTex[p], b = beastTex[p];
@@ -94,8 +107,10 @@ public final class Monster {
             int blum = (br * 77 + bg * 150 + bb * 29) >> 8;
             boolean body = blum > 26;
             if ((c >>> 24) == 0) {
-                // фотография может чуть расширить силуэт (щупальца, пальцы)
-                g.p[i] = body ? photoColor(bc, 10) : 0;
+                // Фотография может чуть расширить силуэт (щупальца, пальцы),
+                // но для ОТДЕЛЬНОЙ части этого делать нельзя: иначе каждый
+                // модуль содержал бы копию целой твари.
+                if (expand) g.p[i] = body ? photoColor(bc, 10) : 0;
                 continue;
             }
             int cr = (c >> 16) & 255, cg = (c >> 8) & 255, cb = c & 255;
@@ -134,8 +149,12 @@ public final class Monster {
     public int moveT;              // 0..4096, прогресс перехода
     public boolean moving, alive;
     public long nextThink, nextAttack, respawnAt;
-    public Raster[] frames;
     public int frameIndex;
+    /** Девять отдельных графических элементов вместо цельного спрайта. */
+    public MonsterRig rig;
+    /** Последовательность разрушения: фрагменты ещё видны, но тварь мертва. */
+    public boolean dying;
+    public long deathStart, deathUntil;
 
     // Поведение Insmouse no Yakata: тварь не «бежит по BFS», а медленно
     // бродит возле своего места, изредка замечает игрока, перед атакой
@@ -176,11 +195,7 @@ public final class Monster {
         m.alive = true;
         m.name = makeName(m);
 
-        m.frames = new Raster[2];
-        m.frames[0] = build(m, 0);
-        m.frames[1] = build(m, 1);
-        m.frames[0].buildVb();
-        m.frames[1].buildVb();
+        m.rig = MonsterRig.build(m);
         return m;
     }
 
@@ -229,12 +244,22 @@ public final class Monster {
         m.homeX = in.readInt();
         m.homeY = in.readInt();
         m.frameIndex = in.readInt();
+        m.dying = in.readBoolean();
+        m.deathStart = in.readLong();
+        m.deathUntil = in.readLong();
+        int deathSeed = in.readInt();
         m.name = makeName(m);
-        m.frames = new Raster[2];
-        m.frames[0] = build(m, 0);
-        m.frames[1] = build(m, 1);
-        m.frames[0].buildVb();
-        m.frames[1].buildVb();
+        m.rig = MonsterRig.build(m);
+        if (m.dying) {
+            // Разлёт продолжается после загрузки сейва со своих позиций.
+            m.alive = true;                 // фрагменты ещё видимы рендереру
+            m.hp = 0;
+            m.moving = false;
+            m.windupUntil = 0;
+            m.fleeUntil = 0;
+            m.rig.startDeath(deathSeed);
+            if (m.respawnAt == 0) m.respawnAt = m.deathUntil + 20000;
+        }
         return m;
     }
 
@@ -271,7 +296,14 @@ public final class Monster {
         out.writeInt(homeX);
         out.writeInt(homeY);
         out.writeInt(frameIndex);
+        out.writeBoolean(dying);
+        out.writeLong(deathStart);
+        out.writeLong(deathUntil);
+        out.writeInt(deathSeed);
     }
+
+    /** Seed разлёта сохраняется, чтобы после load фрагменты не прыгали. */
+    private int deathSeed;
 
     public String description() {
         return HEAD[head] + " / " + TORSO[torso] + " / " + ARMS[arms] +
@@ -298,6 +330,36 @@ public final class Monster {
         nextWander = 0;
         nextBreach = 0;
         frameIndex = 0;
+        dying = false;
+        deathStart = 0;
+        deathUntil = 0;
+        deathSeed = 0;
+        if (rig != null) rig.reset();
+    }
+
+    /** Смерть = не исчезновение, а разлёт девяти отдельных фрагментов. */
+    public void startDeath(long now, int deathSeed) {
+        this.deathSeed = deathSeed;
+        hp = 0;
+        dying = true;
+        moving = false;
+        windupUntil = 0;
+        fleeUntil = 0;
+        deathStart = now;
+        deathUntil = now + MonsterRig.DEATH_MS;
+        if (rig != null) rig.startDeath(deathSeed);
+    }
+
+    public boolean finishDeath(long now) {
+        if (!dying || now < deathUntil) return false;
+        dying = false;
+        alive = false;
+        return true;
+    }
+
+    /** Цельный кадр только для титула/тестов; в бою рендерер берёт rig. */
+    public Raster snapshot() {
+        return rig != null ? rig.snapshot() : new Raster(40, 56);
     }
 
     /** Позиция с интерполяцией между клетками. */
@@ -321,31 +383,80 @@ public final class Monster {
         }
     }
 
-    /** Сборка спрайта 40x56 из частей. phase = 0/1 (кадр атаки). */
-    private static Raster build(Monster m, int phase) {
-        Raster g = new Raster(40, 56);
-        int skin = SKIN[m.palette];
+    /**
+     * Рисует ОДНУ отдельную часть тела в её собственном 40x56 буфере.
+     * Используется для экспорта открытых PNG (gfx/parts/) и как фолбэк,
+     * если атлас удалён из JAR. В игре эти части не склеиваются.
+     */
+    static Raster renderPart(int kind, int variant, int palette) {
+        if (kind == MonsterRig.BODY) return photoBody(palette);
+        int p = palette < 0 || palette > 3 ? 0 : palette;
+        Raster g = new Raster(MonsterRig.CELL_W, MonsterRig.CELL_H);
+        int skin = SKIN[p];
         int dark = Raster.darker(skin, 55);
         int light = Raster.lighter(skin, 35);
-        int metal = 0xff626570;
-        int steel = 0xff9a9ca0;
-        int purple = 0xffb952c7;
-        int purpleDark = 0xff611c6d;
-        int glow = 0xffe08ae8;
-        int black = 0xff101016;
-        int wob = phase == 0 ? 0 : 3;
+        int metal = 0xff626570, steel = 0xff9a9ca0;
+        int purple = 0xffb952c7, purpleDark = 0xff611c6d;
+        int glow = 0xffe08ae8, black = 0xff101016;
+        switch (kind) {
+            case MonsterRig.SHADOW:
+                g.ellipse(20, 53, 13, 2, 0xff2a1030);
+                if (variant == 5) g.ellipse(20, 48, 11, 5, purpleDark);
+                return g;                       // тень остаётся тёмной
+            case MonsterRig.BACK:
+                drawExtraBack(g, variant, purple, purpleDark, light, 0);
+                break;
+            case MonsterRig.LEGS:
+                drawLegs(g, variant, skin, dark, metal, steel, purple, 0, 0);
+                break;
+            case MonsterRig.ARM_L:
+            case MonsterRig.ARM_R: {
+                // Конечности рисуются попарно; делим холст пополам, чтобы
+                // левая и правая стали ДВУМЯ независимыми модулями.
+                Raster tmp = new Raster(MonsterRig.CELL_W, MonsterRig.CELL_H);
+                drawArms(tmp, variant, skin, dark, metal, steel, purple, glow, 0, 0);
+                int lo = kind == MonsterRig.ARM_L ? 0 : 20;
+                int hi = kind == MonsterRig.ARM_L ? 20 : 40;
+                for (int y = 0; y < MonsterRig.CELL_H; y++) {
+                    for (int x = lo; x < hi; x++) {
+                        g.p[y * MonsterRig.CELL_W + x] =
+                                tmp.p[y * MonsterRig.CELL_W + x];
+                    }
+                }
+                break;
+            }
+            case MonsterRig.TORSO:
+                drawTorso(g, variant, skin, dark, light, metal, steel, purple, black);
+                break;
+            case MonsterRig.HEAD:
+                drawHead(g, variant, skin, dark, light, metal, steel,
+                         purple, glow, black, 0);
+                break;
+            case MonsterRig.FRONT:
+                drawExtraFront(g, variant, purple, glow, light, black, 0);
+                break;
+            default:
+                return null;
+        }
+        applyPhotoTint(g, p);
+        return g;
+    }
 
-        // тень / фиолетовая лужа под тварью
-        g.ellipse(20, 53, 13, 2, 0xff2a1030);
-        if (m.legs == 5) g.ellipse(20, 48, 11, 5, purpleDark);
-
-        drawLegs(g, m.legs, skin, dark, metal, steel, purple, phase, wob);
-        drawExtraBack(g, m.extra, purple, purpleDark, light, phase);
-        drawArms(g, m.arms, skin, dark, metal, steel, purple, glow, phase, wob);
-        drawTorso(g, m.torso, skin, dark, light, metal, steel, purple, black);
-        drawHead(g, m.head, skin, dark, light, metal, steel, purple, glow, black, phase);
-        drawExtraFront(g, m.extra, purple, glow, light, black, phase);
-        applyPhotoSkin(g, m.palette);
+    /** «Основная часть тела» — фото-силуэт твари из beast*.png. */
+    private static Raster photoBody(int palette) {
+        ensurePhotos();
+        int p = palette < 0 || palette > 3 ? 0 : palette;
+        Texture b = beastTex[p];
+        Raster g = new Raster(MonsterRig.CELL_W, MonsterRig.CELL_H);
+        if (b == null || b.w < 1 || b.h < 1 || b.rgb == null) return g;
+        for (int y = 0; y < MonsterRig.CELL_H; y++) {
+            for (int x = 0; x < MonsterRig.CELL_W; x++) {
+                int c = b.rgb[(y % b.h) * b.w + (x % b.w)];
+                int lum = (((c >> 16) & 255) * 77 + ((c >> 8) & 255) * 150 +
+                           (c & 255) * 29) >> 8;
+                if (lum > 26) g.p[y * MonsterRig.CELL_W + x] = photoColor(c, 10);
+            }
+        }
         return g;
     }
 

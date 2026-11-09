@@ -196,12 +196,22 @@ public final class Preview {
         tap(g, 55); g.paint(g2);                          // 7 — достать оружие
         save(img, new File(d, "05-aiming.png"));          // прицел + FP-оружие
 
-        placeMonsterInFront(g);
+        int shotMonster = placeMonsterInFront(g);
         g.paint(g2);
-        save(img, new File(d, "06-monster.png"));         // процедурная тварь в прицеле
+        save(img, new File(d, "06-monster.png"));         // модульная тварь в прицеле
 
-        tap(g, 53); g.paint(g2);                          // выстрел с оружием
-        save(img, new File(d, "07-shot.png"));
+        tap(g, 53);                                      // один выстрел = смерть
+        // Сдвигаем начало разлёта в прошлое, чтобы на кадре были ВИДНЫ
+        // отдельные фрагменты, а не только первый кадр разрушения.
+        Field fLevel2 = Game.class.getDeclaredField("level");
+        fLevel2.setAccessible(true);
+        Level shotLevel = (Level) fLevel2.get(g);
+        Monster shot = shotLevel.monsters[shotMonster];
+        long deathNow = System.currentTimeMillis();
+        shot.deathStart = deathNow - 420;
+        shot.deathUntil = shot.deathStart + MonsterRig.DEATH_MS;
+        g.paint(g2);
+        save(img, new File(d, "07-shot.png"));             // разлёт девяти модулей
 
         tap(g, 35); g.paint(g2);                          // # = карта
         save(img, new File(d, "08-map.png"));
@@ -356,7 +366,7 @@ public final class Preview {
     }
 
     /** Ставит тварь в паре клеток перед игроком — только для скриншота. */
-    private static void placeMonsterInFront(Game g) throws Exception {
+    private static int placeMonsterInFront(Game g) throws Exception {
         Field fl = Game.class.getDeclaredField("level"); fl.setAccessible(true);
         Field ftx = Game.class.getDeclaredField("playerTX"); ftx.setAccessible(true);
         Field fty = Game.class.getDeclaredField("playerTY"); fty.setAccessible(true);
@@ -377,6 +387,7 @@ public final class Preview {
             if (lv.monsters[i].head == 2 || lv.monsters[i].arms == 1) { best = i; break; }
         }
         lv.monsters[best].place(mx, my);
+        lv.monsters[best].hp = 1;      // скриншот выстрела показывает разлёт
         for (int i = 0; i < lv.monsterCount; i++) {
             if (i != best) lv.monsters[i].alive = false;
         }
@@ -384,6 +395,7 @@ public final class Preview {
         for (int step = 1; step <= 4; step++) {
             lv.markSeen(px + dx * step, py + dy * step);
         }
+        return best;
     }
 
     private static void tap(Game g, int code) {

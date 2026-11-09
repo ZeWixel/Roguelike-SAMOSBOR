@@ -36,7 +36,7 @@ public final class Game extends Canvas {
             A_OPT_L = 9, A_OPT_R = 10, A_BACK = 11, A_PAUSE = 12, A_COUNT = 13;
 
     private static final int SAVE_MAGIC = 0x47485332; // "GHS2"
-    private static final int SAVE_VERSION = 5;
+    private static final int SAVE_VERSION = 6;   // + dying/разлёт монстра
     private static final int AUTOSAVE_MS = 12000;
     private static final int DAMAGE_COOLDOWN = 2600;
     private static final int SIREN_MS = 30000;
@@ -197,7 +197,7 @@ public final class Game extends Canvas {
         for (int i = 0; i < titleMonsters.length; i++) {
             Raster fromJar = Gfx.titleMonster(i);
             titleMonsters[i] = fromJar != null ? fromJar
-                    : Monster.create(r, i).frames[0];
+                    : Monster.create(r, i).snapshot();
         }
         Raster weaponFromJar = Gfx.weapon();
         weaponSprite = weaponFromJar != null ? weaponFromJar : makeWeapon();
@@ -694,6 +694,14 @@ public final class Game extends Canvas {
         }
         for (int i = 0; i < level.monsterCount; i++) {
             Monster m = level.monsters[i];
+            if (m.dying) {
+                // Фрагменты уже разлетаются: тварь не ходит, не кусает и
+                // не попадает под прицел, но остаётся видимой 0.9 секунды.
+                if (m.finishDeath(now)) {
+                    m.respawnAt = m.respawnAt == 0 ? now + 20000 : m.respawnAt;
+                }
+                continue;
+            }
             if (!m.alive) {
                 if (m.respawnAt != 0 && now >= m.respawnAt && now >= nextRespawnCheck) {
                     int p = level.randomFloor(7);
@@ -991,11 +999,19 @@ public final class Game extends Canvas {
             return;
         }
         Monster m = level.monsters[best];
+        // Разлетающиеся фрагменты уже не являются целью: состояние смерти
+        // ведёт updateMonsters(), а не повторный выстрел.
+        if (!m.alive || m.dying) {
+            setMessage("МИМО", C_GREY);
+            return;
+        }
         // ROM: на тварь уходит ровно 2–8 пуль, выстрел снимает 1 HP.
         m.hp -= 1;
         if (m.hp <= 0) {
-            m.alive = false;
-            m.respawnAt = now + 20000;
+            // НЕ мгновенное исчезновение: запускаем разрушение модульного
+            // спрайта — девять отдельных фрагментов разлетаются 0.9 с.
+            m.startDeath(now, (int) (now ^ (best * 0x45d9f3b)));
+            m.respawnAt = now + 20000 + MonsterRig.DEATH_MS;
             play(Audio.KILL);
             setMessage("ТВАРЬ РАЗОБРАНА НА ЧАСТИ", C_GREEN);
             buzz(80);

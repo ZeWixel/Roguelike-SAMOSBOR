@@ -1,9 +1,9 @@
 MIDlet-1: GigaKhrushchyovka,,samosbor.Main
-MIDlet-Jar-Size: 288259
+MIDlet-Jar-Size: 392445
 MIDlet-Jar-URL: GigaKhrushchyovka.jar
 MIDlet-Name: GigaKhrushchyovka: SAMOSBOR
 MIDlet-Vendor: SAMOSBOR / Arena
-MIDlet-Version: 1.6.0
+MIDlet-Version: 1.7.0
 MIDlet-Description: Roguelike v pervom litse po vselennoi Samosbor
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0

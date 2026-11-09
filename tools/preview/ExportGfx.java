@@ -11,7 +11,7 @@ import javax.imageio.ImageIO;
  *
  * Запускается на том же Java-коде, что и игра, но на MIDP-заглушках JDK:
  * спрайты рисуются теми же процедурными методами (makeWeapon,
- * makeItemSprite, Monster.create), а результат сохраняется в PNG. После
+ * makeItemSprite, Monster.renderPart), а результат сохраняется в PNG. После
  * этого графика становится «открытой»: её можно редактировать в любом
  * редакторе и просто перепаковать JAR — javac больше не нужен.
  *
@@ -26,6 +26,12 @@ public final class ExportGfx {
         out = new File(args.length > 0 ? args[0] : "res/gfx");
         if (!out.exists() && !out.mkdirs()) {
             throw new Exception("cannot create " + out);
+        }
+        // Специальный режим для обычной сборки: доэкспортировать только те
+        // полоски модулей, которых ещё нет. Уже отредактированные PNG не трогаем.
+        if (args.length > 1 && "--parts-only".equals(args[1])) {
+            saveParts(true);
+            return;
         }
 
         BufferedImage dummy = new BufferedImage(240, 320, BufferedImage.TYPE_INT_ARGB);
@@ -55,8 +61,9 @@ public final class ExportGfx {
         }
         Rng rng = new Rng(0x50A40C);
         for (int i = 0; i < 3; i++) {
-            save(Monster.create(rng, i).frames[0], "title-" + i + ".png");
+            save(Monster.create(rng, i).snapshot(), "title-" + i + ".png");
         }
+        saveParts(false);
         saveFontAtlas();
         save(crosshair(), "crosshair.png");
         save(crosshair(), "crosshair-hot.png");
@@ -203,6 +210,9 @@ public final class ExportGfx {
             "gfx/theme.txt              - all UI/fog colors as plain text\n" +
             "                            (KEY=0xAARRGGBB, or 0xRRGGBB)\n" +
             "gfx/source/*.png           - original photo sources for textures\n" +
+            "gfx/parts/*.png            - MODULAR monsters: nine separate body\n" +
+            "                            parts x 4 palettes, six variants per\n" +
+            "                            240x56 strip; edit pieces independently\n" +
             "gfx/screen-play.png        - optional: add it for a custom in-game\n" +
             "                            backdrop (same for screen-pause.png)\n" +
             "\n" +
@@ -212,6 +222,44 @@ public final class ExportGfx {
         java.io.FileOutputStream f = new java.io.FileOutputStream(new File(out, "README.txt"));
         f.write(text.getBytes("UTF-8"));
         f.close();
+    }
+
+    /**
+     * 36 полосок 240x56 = девять ОТДЕЛЬНЫХ частей тела x четыре палитры,
+     * по шесть вариантов каждой части в одной полоске. Это и есть открытые
+     * графические элементы модульного спрайта: игры видит каждый из них
+     * как свой Raster и накладывает независимо от остальных.
+     */
+    private static void saveParts(boolean onlyMissing) throws Exception {
+        File dir = new File(out, "parts");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new Exception("cannot create " + dir);
+        }
+        int written = 0;
+        for (int p = 0; p < 4; p++) {
+            for (int k = 0; k < MonsterRig.PARTS; k++) {
+                String name = "parts/" + MonsterRig.KIND[k] + "-" + p + ".png";
+                File f = new File(out, name);
+                if (onlyMissing && f.isFile()) continue;
+                Raster strip = new Raster(
+                        MonsterRig.VARIANTS * MonsterRig.CELL_W, MonsterRig.CELL_H);
+                for (int v = 0; v < MonsterRig.VARIANTS; v++) {
+                    if (k == MonsterRig.BODY && v > 0) continue;  // общий силуэт
+                    Raster part = Monster.renderPart(k, v, p);
+                    if (part == null) continue;
+                    for (int y = 0; y < MonsterRig.CELL_H; y++) {
+                        for (int x = 0; x < MonsterRig.CELL_W; x++) {
+                            int c = part.p[y * part.w + x];
+                            if ((c >>> 24) == 0) continue;
+                            strip.p[y * strip.w + v * MonsterRig.CELL_W + x] = c;
+                        }
+                    }
+                }
+                save(strip, name);
+                written++;
+            }
+        }
+        System.out.println("  modular parts: " + written + " strips written");
     }
 
     private static void save(Raster r, String name) throws Exception {

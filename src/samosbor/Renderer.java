@@ -251,21 +251,94 @@ public final class Renderer {
                     posX, posY, dirX, dirY, planeX, planeY, -1, horizon);
         }
 
-        // Монстры
+        // Модульные монстры: не один спрайт, а девять отдельных графических
+        // элементов со своими смещениями. При смерти те же части разлетаются.
         if (lv.monsters != null) {
             for (int i = 0; i < lv.monsterCount; i++) {
                 Monster m = lv.monsters[i];
-                if (!m.alive) continue;
+                if (!m.alive || m.rig == null) continue;
                 int cx = m.x >> 12, cy = m.y >> 12;
                 if (!lv.inside(cx, cy) || !lv.seen[lv.idx(cx, cy)]) continue;
-                // Поза выпада/отпрыгивания видна заранее — удар телеграфируется.
                 int frame = (m.windupUntil != 0 || m.fleeUntil > now)
                         ? 1 : (int) ((now / 520) & 1);
                 m.frameIndex = frame;
-                Raster spr = m.frames[frame];
-                drawBillboard(spr, m.x, m.y, 3500, det,
-                        posX, posY, dirX, dirY, planeX, planeY, i, horizon);
+                m.rig.animate(now, m);
+                // В разлёте тварь уже не попадает под прицел и не кусает.
+                drawModular(m, det, posX, posY, dirX, dirY, planeX, planeY,
+                        m.dying ? -1 : i, horizon, now);
             }
+        }
+    }
+
+    /**
+     * Накладывает готовые части твари, НЕ перерисовывая существо целиком.
+     * Трансформация билборда считается один раз, затем каждая часть получает
+     * только своё смещение (dx,dy) в пикселях виртуального спрайта 40x56.
+     */
+    private void drawModular(Monster m, long det, int posX, int posY,
+                             int dirX, int dirY, int planeX, int planeY,
+                             int monsterIndex, int horizon, long now) {
+        long sx = (long) m.x - posX;
+        long sy = (long) m.y - posY;
+        long ty = (((long) sx * planeY - (long) sy * planeX) * FP) / det;
+        long tx = (((long) dirX * sy - (long) dirY * sx) * FP) / det;
+        if (ty <= 80 || ty > 2000000L) return;
+        int screenX = (sw >> 1) + (int) (((long) (sw >> 1) * tx) / ty);
+        int lineH = (int) ((long) sh * FP / ty);
+        int spriteH = (int) ((long) lineH * 3500 >> SHIFT);
+        if (spriteH < 2) return;
+        int spriteW = spriteH * MonsterRig.CELL_W / MonsterRig.CELL_H;
+        if (spriteW < 1) return;
+        int left = screenX - (spriteW >> 1);
+        int top = horizon + (lineH >> 1) - spriteH;
+        int fog = fogByDist(ty);
+        int fade = 256;
+        if (m.dying) {
+            long t = now - m.deathStart;
+            if (t < 0) t = 0;
+            if (t > MonsterRig.DEATH_MS) t = MonsterRig.DEATH_MS;
+            fade = 256 - (int) (t * 256 / MonsterRig.DEATH_MS);
+        }
+        int brightness = fog * fade / 256;
+        boolean drawn = false;
+
+        for (int k = 0; k < MonsterRig.PARTS; k++) {
+            Raster part = m.rig.piece[k];
+            if (part == null) continue;
+            int ox = m.rig.bx[k] + m.rig.dx[k];
+            int oy = m.rig.by[k] + m.rig.dy[k];
+            int x0 = left + ox * spriteW / MonsterRig.CELL_W - 1;
+            int x1 = left + (ox + part.w) * spriteW / MonsterRig.CELL_W + 2;
+            int y0 = top + oy * spriteH / MonsterRig.CELL_H - 1;
+            int y1 = top + (oy + part.h) * spriteH / MonsterRig.CELL_H + 2;
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 > sw) x1 = sw;
+            if (y1 > sh) y1 = sh;
+            if (x0 >= x1 || y0 >= y1) continue;
+            int[] pix = (vbMode && part.vb != null) ? part.vb : part.p;
+            for (int x = x0; x < x1; x++) {
+                if (ty >= (long) zBuffer[x]) continue;
+                int tX = (x - left) * MonsterRig.CELL_W / spriteW - ox;
+                if (tX < 0 || tX >= part.w) continue;
+                for (int y = y0; y < y1; y++) {
+                    int tY = (y - top) * MonsterRig.CELL_H / spriteH - oy;
+                    if (tY < 0 || tY >= part.h) continue;
+                    int c = pix[tY * part.w + tX];
+                    if ((c >>> 24) == 0) continue;
+                    screen[y * sw + x] = shade(c, brightness, fogColor);
+                    drawn = true;
+                }
+            }
+        }
+        if (monsterIndex >= 0 && drawn && sprCount < sprLeft.length) {
+            sprLeft[sprCount] = left;
+            sprTop[sprCount] = top;
+            sprRight[sprCount] = left + spriteW;
+            sprBottom[sprCount] = top + spriteH;
+            sprIndex[sprCount] = monsterIndex;
+            sprDepth[sprCount] = (int) ty;
+            sprCount++;
         }
     }
 

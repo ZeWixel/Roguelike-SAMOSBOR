@@ -42,6 +42,18 @@ public final class Gfx {
     private static int[] plate;
     private static int plateW, plateH;
 
+    // Отдельные части модульных монстров: лениво нарезаются из открытых
+    // полосок gfx/parts/{kind}-{palette}.png. Большой int[] атласа сразу
+    // освобождается, в живых остаются только маленькие обрезанные Raster'ы.
+    private static final Raster[][][] partCache =
+            new Raster[4][MonsterRig.PARTS][MonsterRig.VARIANTS];
+    private static final int[][][] partBaseX =
+            new int[4][MonsterRig.PARTS][MonsterRig.VARIANTS];
+    private static final int[][][] partBaseY =
+            new int[4][MonsterRig.PARTS][MonsterRig.VARIANTS];
+    private static final boolean[][] stripLoaded =
+            new boolean[4][MonsterRig.PARTS];
+
     private static final String[] themeKeys = new String[32];
     private static final int[] themeValues = new int[32];
     private static int themeCount;
@@ -118,6 +130,70 @@ public final class Gfx {
             if (themeKeys[i] != null && themeKeys[i].equals(key)) return themeValues[i];
         }
         return fallback;
+    }
+
+    // --------------------------------------------------- модульные монстры
+
+    private static boolean badPart(int palette, int kind, int variant) {
+        return palette < 0 || palette > 3 || kind < 0 || kind >= MonsterRig.PARTS ||
+               variant < 0 || variant >= MonsterRig.VARIANTS;
+    }
+
+    /** Один отдельный графический элемент твари (или null, если детали нет). */
+    public static synchronized Raster part(int palette, int kind, int variant) {
+        if (badPart(palette, kind, variant)) return null;
+        ensureStrip(palette, kind);
+        return partCache[palette][kind][variant];
+    }
+
+    public static synchronized int partX(int palette, int kind, int variant) {
+        if (badPart(palette, kind, variant)) return 0;
+        ensureStrip(palette, kind);
+        return partBaseX[palette][kind][variant];
+    }
+
+    public static synchronized int partY(int palette, int kind, int variant) {
+        if (badPart(palette, kind, variant)) return 0;
+        ensureStrip(palette, kind);
+        return partBaseY[palette][kind][variant];
+    }
+
+    /** Полоса 240x56 = шесть вариантов одной части одной палитры. */
+    private static void ensureStrip(int palette, int kind) {
+        init();
+        if (stripLoaded[palette][kind]) return;
+        stripLoaded[palette][kind] = true;
+        int[] dim = new int[2];
+        int[] px = Texture.loadPixels(
+                DIR + "parts/" + MonsterRig.KIND[kind] + "-" + palette + ".png", dim);
+        if (px == null || dim[0] < MonsterRig.VARIANTS * MonsterRig.CELL_W ||
+                dim[1] < MonsterRig.CELL_H) return;
+        int aw = dim[0], ah = dim[1];
+        for (int v = 0; v < MonsterRig.VARIANTS; v++) {
+            int x0 = v * MonsterRig.CELL_W;
+            int minX = MonsterRig.CELL_W, minY = MonsterRig.CELL_H, maxX = -1, maxY = -1;
+            for (int y = 0; y < MonsterRig.CELL_H; y++) {
+                for (int x = 0; x < MonsterRig.CELL_W; x++) {
+                    if ((px[y * aw + x0 + x] >>> 24) == 0) continue;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+            if (maxX < 0) continue;               // вариант без этой детали
+            Raster r = new Raster(maxX - minX + 1, maxY - minY + 1);
+            for (int j = 0; j < r.h; j++) {
+                for (int i = 0; i < r.w; i++) {
+                    r.p[j * r.w + i] = px[(minY + j) * aw + x0 + minX + i];
+                }
+            }
+            r.buildVb();
+            partCache[palette][kind][v] = r;
+            partBaseX[palette][kind][v] = minX;
+            partBaseY[palette][kind][v] = minY;
+        }
+        // px больше не нужен: сборщик освободит ~54 КБ сразу.
     }
 
     public static void setScreen(int state) { screen = state; }

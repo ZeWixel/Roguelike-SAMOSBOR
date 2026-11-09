@@ -16,6 +16,11 @@ gfx/overlay.png            - layer drawn on top of every frame
 gfx/theme.txt              - all UI/fog colors as plain text
                             (KEY=0xAARRGGBB, or 0xRRGGBB)
 gfx/source/*.png           - original photo sources for textures
+gfx/parts/*.png            - MODULAR monsters: nine separate body parts
+                            x 4 palettes, six 40x56 variants per 240x56 strip
+                            (body, shadow, back, legs, armL, armR, torso,
+                             head, front). Claws move independently; on death
+                            every piece becomes a flying fragment.
 gfx/screen-play.png        - optional: add it for a custom in-game
                             backdrop (same for screen-pause.png)
 
